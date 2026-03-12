@@ -93,7 +93,7 @@ $$f_\text{lay} = \frac{p_\text{bid} - p_\text{fair} - c \cdot p_\text{bid} \cdot
 
 **Oracle sizing** (confidence-scaled fractional Kelly with drawdown throttle):
 
-$$f = k \cdot f^*_\text{comm} \cdot c_\text{conf} \cdot \lambda_\text{dd}$$
+$$f = k \cdot f^{*}_\text{comm} \cdot c_\text{conf} \cdot \lambda_\text{dd}$$
 
 Where:
 - `k` = base Kelly fraction (0.5 half-Kelly default)
@@ -111,9 +111,9 @@ This is critical for Betfair Lay bets:
 
 ### 2.5 Liquidity-Capped Sizing
 
-$$\text{size}_\text{final} = \min\bigl(f \times \text{Bankroll},\ \text{available\_liquidity} \times 0.70\bigr)$$
+$$\text{size}_\text{final} = \min\bigl(f \times \text{Bankroll},\ L_{\text{avail}} \times 0.70\bigr)$$
 
-The 0.70 safety factor prevents Oracle from consuming > 70% of available liquidity at the target price tier.
+Where $L_{\text{avail}}$ = available liquidity at the target price tier. The 0.70 safety factor prevents Oracle from consuming > 70% of available liquidity.
 
 ---
 
@@ -154,12 +154,14 @@ Starting from the market mid-price as a prior:
 $$p_\text{mid} = \frac{p_\text{ask} + p_\text{bid}}{2}$$
 
 Apply logit-space update:
-$$p_\text{fair} = \sigma\bigl(\text{logit}(p_\text{mid}) + \beta \cdot \text{sentiment\_delta}\bigr)$$
+$$p_\text{fair} = \sigma\bigl(\text{logit}(p_\text{mid}) + \beta \cdot \Delta_{\text{sent}}\bigr)$$
 
-Where `σ` is the sigmoid (logistic) function and `β` is the sentiment weight (default 0.15, tuned in backtest). This ensures `p_fair` remains in (0, 1) by construction.
+Where `σ` is the sigmoid (logistic) function, `β` is the sentiment weight (default 0.15, tuned in backtest), and $\Delta_{\text{sent}}$ = `sentiment_delta`. This ensures `p_fair` remains in (0, 1) by construction.
 
-**Effective confidence** (used for `λ_conf`):
-$$\text{conf} = \text{base\_conf} \times (1 - \text{uncertainty\_penalty})$$
+**Effective confidence** (used for `c_conf`):
+$$\text{conf} = c_{\text{base}} \times (1 - u_{\text{pen}})$$
+
+Where $c_{\text{base}}$ = `base_conf` and $u_{\text{pen}}$ = `uncertainty_penalty`.
 
 ### 3.4 Prompt Templates (JSON-Forced)
 
