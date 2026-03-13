@@ -46,17 +46,17 @@ oracle-py/
 - ~~Fail fast with clear error if required keys missing~~
 - ~~**Test:** `python -c "from src.config import settings; print(settings)"` succeeds~~
 
-**1.3 — Manifold scanner (`src/scanner/manifold.py`)**
-- `get_markets(limit=100, min_volume=500)` → list of market dicts
-- `get_market_detail(market_id)` → full order book with best ask/bid
-- Filter: exclude resolved, exclude near-boundary (prob < 0.05 or > 0.95)
-- HTTP client: `httpx` with 10s timeout, no auth required
-- **Test:** Prints 5 live markets with current prices
+**1.3 — Manifold scanner (`src/scanner/manifold.py`)** ✅ *Completed 2026-03-13*
+- ~~`get_markets(limit=100, min_volume=500)` → list of market dicts~~
+- ~~`get_market_detail(market_id)` → full order book with best ask/bid~~
+- ~~Filter: exclude resolved, exclude near-boundary (prob < 0.05 or > 0.95)~~
+- ~~HTTP client: `httpx` with 10s timeout, no auth required~~
+- ~~**Test:** Prints 5 live markets with current prices~~
 
-**1.4 — Logging setup**
-- `loguru` or stdlib `logging` with rotating file handler (daily, 7-day retention)
-- Structured log format: `timestamp | level | module | message`
-- All modules use `logging.getLogger(__name__)`
+**1.4 — Logging setup** ✅ *Completed 2026-03-13*
+- ~~`loguru` or stdlib `logging` with rotating file handler (daily, 7-day retention)~~
+- ~~Structured log format: `timestamp | level | module | message`~~
+- ~~All modules use `logging.getLogger(__name__)`~~
 
 **1.5 — Scheduler stub (`main.py`)**
 - `APScheduler` `BackgroundScheduler` with one job: scan every 30 minutes
