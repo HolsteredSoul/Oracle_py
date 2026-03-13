@@ -58,10 +58,10 @@ oracle-py/
 - ~~Structured log format: `timestamp | level | module | message`~~
 - ~~All modules use `logging.getLogger(__name__)`~~
 
-**1.5 — Scheduler stub (`main.py`)**
-- `APScheduler` `BackgroundScheduler` with one job: scan every 30 minutes
-- Job just logs: `"Scan cycle started, found N markets"`
-- Graceful shutdown on Ctrl+C
+**1.5 — Scheduler stub (`main.py`)** ✅ *Completed 2026-03-13*
+- ~~`APScheduler` `BackgroundScheduler` with one job: scan every 30 minutes~~
+- ~~Job just logs: `"Scan cycle started, found N markets"`~~
+- ~~Graceful shutdown on Ctrl+C~~
 
 **Phase 1 Exit Gate:**
 - [ ] `python main.py` runs without errors for 1 hour
