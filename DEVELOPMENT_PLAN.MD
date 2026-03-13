@@ -25,7 +25,7 @@ Six sequential phases. Each phase has a clear exit gate — a set of conditions 
 
 ### Tasks
 
-**1.1 — Project setup**
+**1.1 — Project setup** ✅ *Completed 2026-03-13*
 ```
 oracle-py/
 ├── main.py              (empty scheduler stub)
@@ -35,16 +35,16 @@ oracle-py/
 ├── .gitignore
 └── src/__init__.py
 ```
-- Create virtualenv: `python -m venv .venv`
-- Install deps: `pip install -r requirements.txt`
-- Verify imports all resolve
+- ~~Create virtualenv: `python -m venv .venv`~~
+- ~~Install deps: `pip install -r requirements.txt`~~
+- ~~Verify imports all resolve~~
 
-**1.2 — Config loader (`src/config.py`)**
-- Use `pydantic-settings` with `BaseSettings`
-- Load `config.toml` via `toml.load()` + `.env` via `python-dotenv`
-- All config values typed and validated at startup
-- Fail fast with clear error if required keys missing
-- **Test:** `python -c "from src.config import settings; print(settings)"` succeeds
+**1.2 — Config loader (`src/config.py`)** ✅ *Completed 2026-03-13*
+- ~~Use `pydantic-settings` with `BaseSettings`~~
+- ~~Load `config.toml` via `toml.load()` + `.env` via `python-dotenv`~~
+- ~~All config values typed and validated at startup~~
+- ~~Fail fast with clear error if required keys missing~~
+- ~~**Test:** `python -c "from src.config import settings; print(settings)"` succeeds~~
 
 **1.3 — Manifold scanner (`src/scanner/manifold.py`)**
 - `get_markets(limit=100, min_volume=500)` → list of market dicts
