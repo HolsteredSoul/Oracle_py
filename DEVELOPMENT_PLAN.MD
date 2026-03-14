@@ -63,10 +63,10 @@ oracle-py/
 - ~~Job just logs: `"Scan cycle started, found N markets"`~~
 - ~~Graceful shutdown on Ctrl+C~~
 
-**Phase 1 Exit Gate:**
-- [ ] `python main.py` runs without errors for 1 hour
-- [ ] Logs show regular 30-min scan cycles with Manifold market counts
-- [ ] Config validation catches a bad value and prints a clear error
+**Phase 1 Exit Gate:** ✅ *Completed 2026-03-14*
+- [x] `python main.py` runs without errors for 1 hour
+- [x] Logs show regular 30-min scan cycles with Manifold market counts
+- [x] Config validation catches a bad value and prints a clear error
 
 ---
 
