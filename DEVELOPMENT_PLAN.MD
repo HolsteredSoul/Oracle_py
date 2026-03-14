@@ -76,48 +76,48 @@ oracle-py/
 
 ### Tasks
 
-**2.1 — OpenRouter client (`src/llm/client.py`)**
-- `call_llm(prompt, tier="fast")` → parsed JSON dict
-- Tier routing: `fast` → config `fast_model`, `deep` → config `deep_model`
-- Daily spend tracking: read/write `state/llm_spend.json`; auto-downgrade at 80% of cap
-- Retry: `tenacity` with exponential backoff on 429, 500, 503
-- Timeout: 30s per call
-- **Test:** Single call returns `{"sentiment_delta": ..., "uncertainty_penalty": ..., "rationale": ...}`
+**2.1 — OpenRouter client (`src/llm/client.py`)** ✅ *Completed 2026-03-14*
+- ~~`call_llm(prompt, tier="fast")` → parsed JSON dict~~
+- ~~Tier routing: `fast` → config `fast_model`, `deep` → config `deep_model`~~
+- ~~Daily spend tracking: read/write `state/llm_spend.json`; auto-downgrade at 80% of cap~~
+- ~~Retry: `tenacity` with exponential backoff on 429, 500, 503~~
+- ~~Timeout: 30s per call~~
+- ~~**Test:** Single call returns `{"sentiment_delta": ..., "uncertainty_penalty": ..., "rationale": ...}`~~
 
-**2.2 — Prompt templates (`src/llm/prompts.py`)**
-- `build_light_scan_prompt(question, mid_price, news_summary)` → str
-- `build_deep_trigger_prompt(question, mid_price, news_summary, x_summary)` → str
-- `build_exit_prompt(position, updated_news, current_price)` → str
-- Each function enforces JSON-only output instruction in system message
-- **Test:** All three prompts render without errors for sample inputs
+**2.2 — Prompt templates (`src/llm/prompts.py`)** ✅ *Completed 2026-03-14*
+- ~~`build_light_scan_prompt(question, mid_price, news_summary)` → str~~
+- ~~`build_deep_trigger_prompt(question, mid_price, news_summary, x_summary)` → str~~
+- ~~`build_exit_prompt(position, updated_news, current_price)` → str~~
+- ~~Each function enforces JSON-only output instruction in system message~~
+- ~~**Test:** All three prompts render without errors for sample inputs~~
 
-**2.3 — Response validation**
-- Pydantic models: `LightScanResponse`, `DeepTriggerResponse`, `ExitResponse`
-- On parse failure: log the raw response, return `None` (caller skips trade)
-- Never let a malformed LLM response crash the main loop
+**2.3 — Response validation (`src/llm/models.py`)** ✅ *Completed 2026-03-14*
+- ~~Pydantic models: `LightScanResponse`, `DeepTriggerResponse`, `ExitResponse`~~
+- ~~On parse failure: log the raw response, return `None` (caller skips trade)~~
+- ~~Never let a malformed LLM response crash the main loop~~
 
-**2.4 — Enrichment: News (`src/enrichment/news.py`)**
-- `get_news_summary(query, max_articles=5)` → str
-- NewsData.io API via `httpx`
-- Summarize: return top 5 headline+description pairs joined as one string
-- Cache per query per hour (simple dict in memory)
+**2.4 — Enrichment: News (`src/enrichment/news.py`)** ✅ *Completed 2026-03-14*
+- ~~`get_news_summary(query, max_articles=5)` → str~~
+- ~~NewsData.io API via `httpx`~~
+- ~~Summarize: return top 5 headline+description pairs joined as one string~~
+- ~~Cache per query per hour (simple dict in memory)~~
 
-**2.5 — Enrichment: X/Twitter (`src/enrichment/x_sentiment.py`)**
-- `get_x_summary(keywords, max_tweets=20)` → str
-- X API v2 recent search endpoint via `httpx`
-- Rate-limit aware: track remaining requests from response headers
-- Return recent tweets joined as summary string; return empty string on rate limit hit (non-fatal)
+**2.5 — Enrichment: X/Twitter (`src/enrichment/x_sentiment.py`)** ✅ *Completed 2026-03-14*
+- ~~`get_x_summary(keywords, max_tweets=20)` → str~~
+- ~~X API v2 recent search endpoint via `httpx`~~
+- ~~Rate-limit aware: track remaining requests from response headers~~
+- ~~Return recent tweets joined as summary string; return empty string on rate limit hit (non-fatal)~~
 
-**2.6 — Trigger detector**
-- `should_trigger_deep(sentiment_delta, volatility_z, x_momentum)` → bool
-- Pure function, testable without network calls
-- Reads thresholds from config
+**2.6 — Trigger detector (`src/enrichment/trigger.py`)** ✅ *Completed 2026-03-14*
+- ~~`should_trigger_deep(sentiment_delta, volatility_z, x_momentum)` → bool~~
+- ~~Pure function, testable without network calls~~
+- ~~Reads thresholds from config~~
 
-**Phase 2 Exit Gate:**
-- [ ] 10 consecutive light scan calls succeed and return valid JSON
-- [ ] 2 deep trigger calls succeed and return valid JSON
-- [ ] Daily spend counter increments correctly and logs warning near cap
-- [ ] A bad LLM response (simulate by mocking) does not crash the loop
+**Phase 2 Exit Gate:** ✅ *Completed 2026-03-14*
+- [x] 10 consecutive light scan calls succeed and return valid JSON
+- [x] 2 deep trigger calls succeed and return valid JSON
+- [x] Daily spend counter increments correctly and logs warning near cap
+- [x] A bad LLM response (simulate by mocking) does not crash the loop
 
 ---
 
