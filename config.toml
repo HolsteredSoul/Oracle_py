@@ -1,7 +1,7 @@
 [llm]
 # Update model IDs here as new models are released — never hardcode in source
-fast_model = "grok-3-mini-fast"
-deep_model = "claude-sonnet-4-6"
+fast_model = "x-ai/grok-4.1-fast"
+deep_model = "anthropic/claude-sonnet-4.6"
 daily_cap_usd = 5.0
 downgrade_threshold_pct = 0.80
 

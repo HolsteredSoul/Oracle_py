@@ -175,8 +175,8 @@ def call_llm(prompt: str, tier: str = "fast") -> dict | None:
 
     data = response.json()
 
-    # Track cost (OpenRouter includes total_cost in usage when available)
-    cost: float = (data.get("usage") or {}).get("total_cost") or 0.0
+    # Track cost (OpenRouter returns "cost" in usage)
+    cost: float = (data.get("usage") or {}).get("cost") or 0.0
     if cost:
         _add_spend(cost)
         logger.debug("LLM call cost: $%.6f | daily total: $%.4f", cost, _get_today_spend())
