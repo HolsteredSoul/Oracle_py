@@ -22,6 +22,9 @@ logs/
 # Data (large files, downloaded during backtest)
 data/
 
+# Claude tooling (local only)
+Make_No_Mistakes_Claude.md
+
 # IDE
 .idea/
 .vscode/
