@@ -9,6 +9,7 @@ pydantic-settings>=2.3
 python-dotenv>=1.0
 scipy>=1.13
 toml>=0.10
+betfairlightweight>=2.20
 pytest>=8.2
 pytest-asyncio>=0.23
 hypothesis>=6.100
