@@ -40,6 +40,8 @@ _client: betfairlightweight.APIClient | None = None
 _RESOLVED_STATUSES = {"CLOSED", "SETTLED"}
 _PROB_FLOOR = 0.05
 _PROB_CEIL = 0.95
+# Betfair API hard limit: list_market_book accepts at most 200 market IDs per call.
+_BOOK_BATCH_SIZE = 200
 
 
 def _get_client() -> betfairlightweight.APIClient:
@@ -139,12 +141,18 @@ def get_markets(
         logger.info("Betfair scan: no markets returned for countries=%s", country_codes)
         return []
 
+    # list_market_book accepts at most _BOOK_BATCH_SIZE IDs per call — batch if needed.
     market_ids = [m.market_id for m in catalogue]
-    books = client.betting.list_market_book(
-        market_ids=market_ids,
-        price_projection=price_projection(price_data=["EX_BEST_OFFERS"]),
-    )
-    book_by_id = {b.market_id: b for b in books}
+    all_books: list = []
+    for i in range(0, len(market_ids), _BOOK_BATCH_SIZE):
+        batch = market_ids[i : i + _BOOK_BATCH_SIZE]
+        all_books.extend(
+            client.betting.list_market_book(
+                market_ids=batch,
+                price_projection=price_projection(price_data=["EX_BEST_OFFERS"]),
+            )
+        )
+    book_by_id = {b.market_id: b for b in all_books}
 
     markets: list[dict] = []
     for cat in catalogue:
