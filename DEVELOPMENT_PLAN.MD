@@ -186,7 +186,7 @@ def check_risk_gates(f, conf_score, current_exposure, drawdown_pct, config) -> t
 
 ### Tasks
 
-**4.1 — State manager (`src/storage/state_manager.py`)**
+**4.1 — State manager (`src/storage/state_manager.py`)** ✅ *Completed 2026-03-15*
 ```python
 class StateManager:
     def load() -> OracleState
@@ -194,27 +194,27 @@ class StateManager:
     def add_trade(trade: Trade) -> None
     def update_position(market_id, fill) -> None
 ```
-- `OracleState`: pydantic model with `bankroll`, `positions`, `trade_history`, `priors`
-- Atomic write: write to `.tmp` then `os.replace()` — never corrupt state on crash
-- **Test:** Simulate crash mid-write; state file remains valid on reload
+- ~~`OracleState`: pydantic model with `bankroll`, `positions`, `trade_history`, `priors`~~
+- ~~Atomic write: write to `.tmp` then `os.replace()` — never corrupt state on crash~~
+- ~~**Test:** Simulate crash mid-write; state file remains valid on reload~~
 
-**4.2 — Paper execution (`src/execution/paper.py`)**
-- Simulate Fill-or-Kill: fills at `p_ask` if size ≤ available liquidity × 0.70, else partial fill
-- Simulate partial fills: fill 60–90% of requested size (random within range)
-- Apply commission on close
-- Update bankroll and positions in StateManager
-- Log every trade with: timestamp, market_id, direction, requested_size, filled_size, price, edge, p_fair
+**4.2 — Paper execution (`src/execution/paper.py`)** ✅ *Completed 2026-03-15*
+- ~~Simulate Fill-or-Kill: fills at `p_ask` if size ≤ available liquidity × 0.70, else partial fill~~
+- ~~Simulate partial fills: fill 60–90% of requested size (random within range)~~
+- ~~Apply commission on close~~
+- ~~Update bankroll and positions in StateManager~~
+- ~~Log every trade with: timestamp, market_id, direction, requested_size, filled_size, price, edge, p_fair~~
 
-**4.3 — Main loop integration (`main.py`)**
-- Wire all components: Scanner → Enrichment → LLM → Bayesian → Edge → Kelly → Risk → Execution → State → Dashboard
-- Add CLI flag `--paper` (default) vs `--live` (Phase 6 only)
-- Graceful exception handling: any unhandled exception in one cycle logs error and continues to next cycle; does not crash the agent
+**4.3 — Main loop integration (`main.py`)** ✅ *Completed 2026-03-15*
+- ~~Wire all components: Scanner → Enrichment → LLM → Bayesian → Edge → Kelly → Risk → Execution → State → Dashboard~~
+- ~~Add CLI flag `--paper` (default) vs `--live` (Phase 6 only)~~
+- ~~Graceful exception handling: any unhandled exception in one cycle logs error and continues to next cycle; does not crash the agent~~
 
-**4.4 — Streamlit dashboard (`src/dashboard/app.py`)**
-- All panels from whitepaper §7
-- Auto-refresh every 60 seconds (use `st.rerun()` with `time.sleep(60)`)
-- Reads from `state/oracle_state.json` (no direct coupling to running agent)
-- Run separately: `streamlit run src/dashboard/app.py`
+**4.4 — Streamlit dashboard (`src/dashboard/app.py`)** ✅ *Completed 2026-03-15*
+- ~~All panels from whitepaper §7~~
+- ~~Auto-refresh every 60 seconds (use `st.rerun()` with `time.sleep(60)`)~~
+- ~~Reads from `state/oracle_state.json` (no direct coupling to running agent)~~
+- ~~Run separately: `streamlit run src/dashboard/app.py`~~
 
 **4.5 — Integration test**
 - Run paper trading for 48 hours
