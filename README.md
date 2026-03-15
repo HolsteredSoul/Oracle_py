@@ -24,7 +24,8 @@ Oracle is an event-driven trading agent built around a core principle: **LLM as 
 ```
 main.py (30-min scan cycle)
     │
-    ├── scanner/manifold.py        — Fetch live Manifold markets
+    ├── scanner/manifold.py        — Fetch live Manifold markets (default)
+    ├── scanner/betfair_scanner.py — Fetch live Betfair AU markets (--betfair-paper)
     ├── enrichment/trigger.py      — Decide: light scan or deep trigger?
     │       ├── enrichment/news.py       — NewsData.io headlines
     │       └── enrichment/x_sentiment.py — X API v2 tweet search
@@ -69,9 +70,10 @@ pip install -r requirements.txt
 
 1. Create a `.env` file in the project root:
 
-   **Paper trading (minimum required):**
+   **Paper trading on Manifold (minimum required):**
    ```
    OPENROUTER_API_KEY=sk-or-v1-...   # required — all LLM calls route through OpenRouter
+   MANIFOLD_API_KEY=...               # optional — reserved for future authenticated Manifold calls
    ```
 
    **Enrichment (optional — agent degrades gracefully without these):**
@@ -80,12 +82,12 @@ pip install -r requirements.txt
    X_BEARER_TOKEN=...                 # X API v2 — enables tweet momentum triggers
    ```
 
-   **Live Betfair (Phase 6 only — leave blank for paper trading):**
+   **Betfair paper trading (`--betfair-paper`) and live trading (Phase 6):**
    ```
-   BETFAIR_USERNAME=...
-   BETFAIR_PASSWORD=...
-   BETFAIR_APP_KEY=...
-   BETFAIR_CERTS_PATH=/path/to/certs  # directory containing client-2048.crt and client-2048.key
+   BETFAIR_USERNAME=...               # Betfair account email
+   BETFAIR_PASSWORD=...               # Betfair account password
+   BETFAIR_APP_KEY=...                # App key from Betfair Developer portal (1.0-DELAY for paper)
+   BETFAIR_CERTS_PATH=...             # Phase 6 only: directory with client-2048.crt and .key
    ```
 
 2. Review `config.toml` — key settings to check before running:
@@ -107,12 +109,17 @@ pip install -r requirements.txt
 ### Running
 
 ```bash
-# Start the agent (paper trading mode)
+# Paper trading — Manifold Markets data (default)
 python main.py
+
+# Paper trading — real Betfair AU market data, no bets placed
+python main.py --betfair-paper
 
 # Launch the monitoring dashboard (separate terminal)
 streamlit run src/dashboard/app.py
 ```
+
+`--betfair-paper` uses live Betfair exchange prices and volumes for the full pipeline (probability, spread, liquidity) while keeping `PaperBroker` for all execution and settlement. No bets are ever placed.
 
 The dashboard is available at `http://localhost:8501`.
 
@@ -220,7 +227,7 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | 5 | Backtesting & Tuning — historical replay, parameter sweep | Not started |
 | 6 | Live Betfair — OMS, market mapping, safeguards | Not started |
 
-31 unit tests passing across Kelly, Bayesian, edge, risk, state manager, and paper execution modules.
+102 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution, and Betfair scanner modules.
 
 ---
 

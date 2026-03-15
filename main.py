@@ -30,6 +30,7 @@ from src.llm.models import DeepTriggerResponse, LightScanResponse
 from src.llm.prompts import build_deep_trigger_prompt, build_light_scan_prompt
 from src.logging_setup import configure_logging
 from src.risk.manager import check_risk_gates
+from src.scanner import betfair_scanner
 from src.scanner.manifold import get_market_detail, get_markets
 from src.storage.state_manager import OracleState, StateManager
 from src.strategy.bayesian import update_probability
@@ -59,6 +60,15 @@ def _parse_args() -> argparse.Namespace:
         default=False,
         help="Enable live Betfair execution (Phase 6 only — currently disabled).",
     )
+    parser.add_argument(
+        "--betfair-paper",
+        action="store_true",
+        default=False,
+        help=(
+            "Paper trading using real Betfair AU market data. "
+            "No bets are placed — uses PaperBroker with Betfair prices."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -74,6 +84,7 @@ def _analyse_and_trade(
     exposure: float,
     drawdown: float,
     mode: str,
+    get_detail_fn=get_market_detail,
 ) -> None:
     """Run the full intelligence + strategy + execution pipeline for one market."""
     market_id = market["id"]
@@ -140,7 +151,7 @@ def _analyse_and_trade(
 
     # --- Market detail for accurate spread + liquidity ---
     try:
-        detail = get_market_detail(market_id)
+        detail = get_detail_fn(market_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to fetch market detail for %s: %s", market_id, exc)
         return
@@ -224,12 +235,47 @@ def _analyse_and_trade(
 # Scan cycle
 # ---------------------------------------------------------------------------
 
+def _settle_betfair_positions(
+    state: OracleState,
+    broker: PaperBroker,
+    state_manager: StateManager,
+) -> OracleState:
+    """Settle open positions using Betfair market data.
+
+    Equivalent to PaperBroker.check_and_settle_positions() but calls
+    betfair_scanner.get_market_detail() instead of the Manifold equivalent.
+    PaperBroker is left unchanged — settlement is driven from here.
+    """
+    for market_id in list(state.positions.keys()):
+        try:
+            detail = betfair_scanner.get_market_detail(market_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to fetch Betfair detail for open position %s: %s — skipping.",
+                market_id,
+                exc,
+            )
+            continue
+
+        if detail.get("isResolved"):
+            resolution = detail.get("resolution", "MKT")
+            res_prob = detail.get("probability", 0.5)
+            try:
+                state, _ = broker.settle_position(state, market_id, resolution, res_prob)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Settlement failed for %s: %s", market_id, exc)
+
+    return state
+
+
 def scan_cycle(
     state_manager: StateManager,
     broker: PaperBroker,
     mode: str,
 ) -> None:
     """Run one full scan cycle with settlement checks and paper execution."""
+    is_betfair = mode == "betfair-paper"
+
     try:
         # Kill switch — scan only, no new trades
         if _KILL_SWITCH_PATH.exists():
@@ -238,14 +284,22 @@ def scan_cycle(
 
         # Load state and settle any resolved positions
         state = state_manager.load()
-        state = broker.check_and_settle_positions(state)
+        if is_betfair:
+            state = _settle_betfair_positions(state, broker, state_manager)
+        else:
+            state = broker.check_and_settle_positions(state)
 
         # Compute risk metrics once at cycle start
         exposure = state_manager.current_exposure(state)
         drawdown = state_manager.drawdown_pct(state)
 
-        markets = get_markets()
-        logger.info("Scan cycle started, found %d markets", len(markets))
+        if is_betfair:
+            markets = betfair_scanner.get_markets()
+        else:
+            markets = get_markets()
+        logger.info("Scan cycle started (%s), found %d markets", mode, len(markets))
+
+        get_detail_fn = betfair_scanner.get_market_detail if is_betfair else get_market_detail
 
         for market in markets[:_MAX_MARKETS_PER_CYCLE]:
             # Skip markets where we already hold a position
@@ -262,6 +316,7 @@ def scan_cycle(
                     exposure=exposure,
                     drawdown=drawdown,
                     mode=mode,
+                    get_detail_fn=get_detail_fn,
                 )
                 # Reload after potential trade to get updated exposure/drawdown
                 state = state_manager.load()
@@ -287,7 +342,7 @@ def main() -> None:
             "--live mode is reserved for Phase 6. "
             "Remove --live to run paper trading."
         )
-    mode = "paper"
+    mode = "betfair-paper" if args.betfair_paper else "paper"
 
     state_manager = StateManager()
     broker = PaperBroker(state_manager, settings)
@@ -305,9 +360,11 @@ def main() -> None:
         next_run_time=datetime.now(),
     )
     scheduler.start()
+    data_source = "Betfair AU (paper)" if mode == "betfair-paper" else "Manifold (paper)"
     logger.info(
-        "Oracle agent started | mode=%s interval=%d min | Ctrl+C to stop.",
+        "Oracle agent started | mode=%s data=%s interval=%d min | Ctrl+C to stop.",
         mode,
+        data_source,
         interval_min,
     )
 

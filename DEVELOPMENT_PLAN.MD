@@ -220,6 +220,17 @@ class StateManager:
 - Run paper trading for 48 hours
 - Verify: ≥ 3 trades executed, P&L tracked correctly, no state corruption
 
+**4.6 — Betfair paper scanner (`src/scanner/betfair_scanner.py`)** ✅ *Completed 2026-03-15*
+- ~~`get_markets(country_codes=["AU"])` → list of market dicts (same shape as manifold.py)~~
+- ~~`get_market_detail(market_id)` → dict with `id`, `question`, `probability`, `volume`, `url`, `totalLiquidity`, `isResolved`, `resolution`~~
+- ~~`probability = 1 / best_back_price`; `totalLiquidity = sum(back_sizes + lay_sizes)`; `isResolved = status in {CLOSED, SETTLED}`~~
+- ~~Interactive login via `betfairlightweight` (no cert files required)~~
+- ~~`--betfair-paper` flag wired in `main.py`; `PaperBroker` unchanged~~
+- ~~Settlement uses `_settle_betfair_positions()` in `main.py` to call `betfair_scanner.get_market_detail()` instead of Manifold~~
+- ~~`MANIFOLD_API_KEY` added to `.env` and `src/config.py`~~
+- ~~18 unit tests in `tests/test_betfair_scanner.py` (mocked API, no network required)~~
+- ~~**Test:** `pytest tests/test_betfair_scanner.py` — 18/18 pass; full suite 102/102 pass~~
+
 **Phase 4 Exit Gate:**
 - [ ] 50 paper trades logged over ≥ 1 week
 - [ ] P&L accounting matches manual check on 5 random trades

@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     newsdata_api_key: str = ""
     x_bearer_token: str = ""
+    manifold_api_key: str = ""
     betfair_username: str = ""
     betfair_password: str = ""
     betfair_app_key: str = ""
