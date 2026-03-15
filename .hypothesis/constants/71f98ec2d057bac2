@@ -1,4 +1,0 @@
-# file: C:\Users\pierr\OneDrive\Documents\GitHub\Oracle_py\src\execution\paper.py
-# hypothesis_version: 6.151.9
-
-[0.0, 0.01, 0.5, 0.6, 0.9, 0.99, 1.0, 100.0, 120, 'MKT', 'NO', 'YES', 'back', 'commission_paid', 'exit_price', 'exit_timestamp', 'isResolved', 'lay', 'open', 'pnl', 'probability', 'resolution', 'settled', 'status']

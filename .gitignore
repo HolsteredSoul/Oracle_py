@@ -25,6 +25,9 @@ data/
 # Claude tooling (local only)
 Make_No_Mistakes_Claude.md
 
+# Hypothesis test cache
+.hypothesis/
+
 # IDE
 .idea/
 .vscode/
