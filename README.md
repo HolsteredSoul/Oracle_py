@@ -68,10 +68,24 @@ pip install -r requirements.txt
 ### Configuration
 
 1. Create a `.env` file in the project root:
+
+   **Paper trading (minimum required):**
    ```
-   OPENROUTER_API_KEY=sk-or-v1-...
-   NEWSDATA_API_KEY=...        # optional
-   X_BEARER_TOKEN=...          # optional
+   OPENROUTER_API_KEY=sk-or-v1-...   # required — all LLM calls route through OpenRouter
+   ```
+
+   **Enrichment (optional — agent degrades gracefully without these):**
+   ```
+   NEWSDATA_API_KEY=...               # NewsData.io — enables news headline triggers
+   X_BEARER_TOKEN=...                 # X API v2 — enables tweet momentum triggers
+   ```
+
+   **Live Betfair (Phase 6 only — leave blank for paper trading):**
+   ```
+   BETFAIR_USERNAME=...
+   BETFAIR_PASSWORD=...
+   BETFAIR_APP_KEY=...
+   BETFAIR_CERTS_PATH=/path/to/certs  # directory containing client-2048.crt and client-2048.key
    ```
 
 2. Review `config.toml` — key settings to check before running:
@@ -107,6 +121,57 @@ The dashboard is available at `http://localhost:8501`.
 ```bash
 pytest tests/ -v
 ```
+
+---
+
+## Paper Trading
+
+Oracle uses Manifold Markets as a paper trading venue. No real money is involved — Manifold uses play-money (mana). The paper broker simulates realistic exchange behaviour so the same code path runs unmodified when switching to live Betfair later.
+
+### Fill Simulation
+
+Every order is Fill-or-Kill:
+
+```
+requested_size = f_final × bankroll
+
+if requested_size ≤ available_liquidity × 0.70:
+    fill at 100%
+else:
+    fill at random.uniform(60%, 90%)   # partial fill
+```
+
+The 70% liquidity safety factor ensures Oracle never moves the market against itself.
+
+### Settlement
+
+Positions are checked for resolution at the top of every 30-minute scan cycle via `check_and_settle_positions()`. When a market resolves, P&L is calculated and the position is closed:
+
+| Direction | Resolution | P&L |
+|-----------|------------|-----|
+| Back | YES | `stake × (1/entry_price − 1) × (1 − commission)` |
+| Back | NO | `−stake` |
+| Lay | NO | `stake × (1 − commission)` |
+| Lay | YES | `−liability` |
+| Back or Lay | MKT | partial win using `resolution_probability` as settlement price |
+
+Commission (`commission_pct = 0.05`) is applied to gross winnings only — never to losses.
+
+### State File
+
+All bankroll, positions, and trade history are persisted to `state/oracle_state.json` after every trade and settlement. Writes are atomic (`tmp → replace()`). The file is git-ignored.
+
+```json
+{
+  "bankroll": 1000.0,
+  "peak_bankroll": 1043.20,
+  "positions": { "<market_id>": { ... } },
+  "trade_history": [ { ... } ],
+  "priors": { "<market_id>": 0.62 }
+}
+```
+
+To reset the paper bankroll, delete `state/oracle_state.json` — it will be recreated on next run.
 
 ---
 
