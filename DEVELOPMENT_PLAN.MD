@@ -133,8 +133,8 @@ def executable_edge(p_fair, p_ask, p_bid, direction) -> float:
     # direction: "back" or "lay"
     # Returns signed edge; negative means no edge
 ```
-- Commission not applied here (applied in Kelly)
-- **Tests:** Back edge positive when p_fair > ask; lay edge positive when p_fair < bid; edge = 0 at breakeven
+- ~~Commission not applied here (applied in Kelly)~~
+- ~~**Tests:** Back edge positive when p_fair > ask; lay edge positive when p_fair < bid; edge = 0 at breakeven~~
 
 **3.2 — Bayesian updater (`src/strategy/bayesian.py`)** ✅ *Completed 2026-03-15*
 ```python
@@ -142,9 +142,9 @@ def update_probability(p_mid, sentiment_delta, beta) -> float:
     # Returns p_fair in (0, 1) by construction
     # Uses scipy.special.logit / expit
 ```
-- Handle edge cases: `p_mid` near 0 or 1 (clamp to [0.001, 0.999] before logit)
-- `beta = 0` must return `p_mid` exactly
-- **Tests:** Positive delta increases probability; negative decreases; β=0 is identity; boundary probs handled
+- ~~Handle edge cases: `p_mid` near 0 or 1 (clamp to [0.001, 0.999] before logit)~~
+- ~~`beta = 0` must return `p_mid` exactly~~
+- ~~**Tests:** Positive delta increases probability; negative decreases; β=0 is identity; boundary probs handled~~
 
 **3.3 — Kelly calculator (`src/strategy/kelly.py`)** ✅ *Completed 2026-03-15*
 ```python
@@ -162,8 +162,8 @@ def translate_to_betfair(f, bankroll, decimal_odds, direction) -> dict:
     # Returns {"stake": ..., "liability": ...}
     # direction: "back" or "lay"
 ```
-- f* > 1.0 logs a warning (hard cap handles safety); f_final hard-capped at 0.25
-- **Tests:** 10 unit tests + hypothesis property test (500 examples, f_final ≤ 0.25 always)
+- ~~f* > 1.0 logs a warning (hard cap handles safety); f_final hard-capped at 0.25~~
+- ~~**Tests:** 10 unit tests + hypothesis property test (500 examples, f_final ≤ 0.25 always)~~
 
 **3.4 — Risk manager (`src/risk/manager.py`)** ✅ *Completed 2026-03-15*
 ```python
@@ -171,7 +171,7 @@ def check_risk_gates(f, conf_score, current_exposure, drawdown_pct, config) -> t
     # Returns (approved: bool, reason: str)
     # Gates: confidence floor, exposure cap reached, trade would breach cap
 ```
-- **Tests:** Each gate fires independently; approved path returns True with "OK" reason
+- ~~**Tests:** Each gate fires independently; approved path returns True with "OK" reason~~
 
 **Phase 3 Exit Gate:** ✅ *Completed 2026-03-15*
 - [x] `pytest tests/test_kelly.py tests/test_bayesian.py tests/test_edge.py tests/test_risk.py` all pass (31/31)
