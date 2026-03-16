@@ -40,8 +40,9 @@ _client: betfairlightweight.APIClient | None = None
 _RESOLVED_STATUSES = {"CLOSED", "SETTLED"}
 _PROB_FLOOR = 0.05
 _PROB_CEIL = 0.95
-# Betfair API hard limit: list_market_book accepts at most 200 market IDs per call.
-_BOOK_BATCH_SIZE = 200
+# Betfair's TOO_MUCH_DATA limit is response-size based, not market count.
+# AU horse-racing markets have 8-20 runners each; empirical safe limit ~40 per call.
+_BOOK_BATCH_SIZE = 40
 
 
 def _get_client() -> betfairlightweight.APIClient:
@@ -134,7 +135,7 @@ def get_markets(
     catalogue = client.betting.list_market_catalogue(
         filter=market_filter(market_countries=country_codes),
         market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION"],
-        max_results=limit * 3,  # fetch more; probability filter will trim
+        max_results=min(limit * 3, 200),  # cap to avoid excessive batches
     )
 
     if not catalogue:
