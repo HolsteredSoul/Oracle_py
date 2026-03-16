@@ -326,6 +326,10 @@ def scan_cycle(
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error analysing market %s: %s", market.get("id"), exc)
 
+        # Always persist state so the dashboard shows current bankroll/positions
+        # even during cycles where no edge was found and no trade was placed.
+        state_manager.save(state)
+
     except Exception as exc:  # noqa: BLE001
         logger.error("Scan cycle failed: %s", exc)
 

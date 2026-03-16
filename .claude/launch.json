@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Oracle Agent (betfair-paper)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py", "--betfair-paper"],
+      "port": 0
+    },
+    {
+      "name": "Oracle Agent (manifold-paper)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py"],
+      "port": 0
+    },
+    {
+      "name": "Oracle Dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "streamlit", "run", "src/dashboard/app.py"],
+      "port": 8501
+    }
+  ]
+}
