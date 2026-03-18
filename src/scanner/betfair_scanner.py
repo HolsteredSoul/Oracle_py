@@ -52,19 +52,21 @@ _PROB_CEIL = 0.95
 # AU horse-racing markets have 8-20 runners each; empirical safe limit ~40 per call.
 _BOOK_BATCH_SIZE = 40
 
+# Safe market types: runner[0] reliably represents the named selection.
+# Excluded: OVER_UNDER_*, ASIAN_HANDICAP, CORRECT_SCORE, BOTH_TEAMS_TO_SCORE,
+#           HALF_TIME, DOUBLE_CHANCE, TOTAL_GOALS, ALT_TOTAL_GOALS, FIRST_HALF_GOALS
+# — all have ambiguous runner ordering that causes wrong-side trade placement.
+_SAFE_MARKET_TYPES = {"MATCH_ODDS", "WINNER", "OUTRIGHT_WINNER", "DRAW_NO_BET", "MONEYLINE"}
+
 # Market type priority: lower number = higher priority.
-# MATCH_ODDS and OVER_UNDER markets have active price discovery near events.
 _MARKET_TYPE_PRIORITY: dict[str, int] = {
     "MATCH_ODDS": 0,
     "MONEYLINE": 0,
-    "HALF_TIME": 1,
-    "OVER_UNDER_25_5": 1,
-    "OVER_UNDER_35_5": 1,
-    "CORRECT_SCORE": 2,
-    "WINNER": 3,
-    "OUTRIGHT_WINNER": 3,
+    "DRAW_NO_BET": 1,
+    "WINNER": 2,
+    "OUTRIGHT_WINNER": 2,
 }
-_DEFAULT_MARKET_PRIORITY = 2  # for unknown types
+_DEFAULT_MARKET_PRIORITY = 3  # for unknown types
 
 
 def _create_and_login() -> betfairlightweight.APIClient:
@@ -273,6 +275,11 @@ def get_markets(
         _desc = getattr(cat, "description", None)
         if _desc is not None:
             market_type = getattr(_desc, "market_type", "") or ""
+
+        # Skip markets where runner[0] identity is ambiguous (Over/Under, AH, BTTS, etc.)
+        if market_type and market_type not in _SAFE_MARKET_TYPES:
+            logger.debug("Skipping market %s — unsafe market type %r", cat.market_id, market_type)
+            continue
 
         # Runner name — the specific selection being priced
         runner_name = ""
