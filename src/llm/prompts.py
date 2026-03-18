@@ -48,11 +48,23 @@ def build_light_scan_prompt(
     if market_type:
         selection_ctx += f"\nMarket type: {market_type}"
 
+    selection_label = runner_name or "YES"
+    direction_instruction = (
+        f"IMPORTANT — delta sign convention for THIS selection:\n"
+        f"  sentiment_delta > 0  means '{selection_label}' is MORE likely than {mid_price:.3f} implies.\n"
+        f"  sentiment_delta < 0  means '{selection_label}' is LESS likely than {mid_price:.3f} implies.\n"
+        f"  sentiment_delta = 0  means the market price is approximately fair.\n"
+        f"Example: if the market shows Under 7.5 Goals at 9.5% but you think it should be ~95%, "
+        f"return a POSITIVE delta (the Under selection is more likely than priced)."
+    )
+
     return f"""{_SYSTEM_LIGHT}
 
 Market question: {question}{selection_ctx}
 Current mid-price (implied probability): {mid_price:.3f}
 Recent news: {news_summary or "No recent news available."}
+
+{direction_instruction}
 
 Reason about whether the current mid-price looks fair or mispriced. Consider:
 - Your knowledge of this sport, team, or event
@@ -96,12 +108,24 @@ def build_deep_trigger_prompt(
     if market_type:
         selection_ctx += f"\nMarket type: {market_type}"
 
+    selection_label = runner_name or "YES"
+    direction_instruction = (
+        f"IMPORTANT — delta sign convention for THIS selection:\n"
+        f"  sentiment_delta > 0  means '{selection_label}' is MORE likely than {mid_price:.3f} implies.\n"
+        f"  sentiment_delta < 0  means '{selection_label}' is LESS likely than {mid_price:.3f} implies.\n"
+        f"  sentiment_delta = 0  means the market price is approximately fair.\n"
+        f"Example: if the market shows Under 7.5 Goals at 9.5% but you think it should be ~95%, "
+        f"return a POSITIVE delta (the Under selection is more likely than priced)."
+    )
+
     return f"""{_SYSTEM_DEEP}
 
 Market question: {question}{selection_ctx}
 Current mid-price (implied probability): {mid_price:.3f}
 Recent news: {news_summary or "No recent news available."}
 X/Twitter sentiment: {x_summary or "No X data available."}
+
+{direction_instruction}
 
 Step-by-step:
 1. Synthesize all news and X/Twitter signals.

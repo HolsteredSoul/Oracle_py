@@ -13,7 +13,7 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-_HARD_CAP = 0.25  # Maximum fraction of bankroll risked on any single trade
+_HARD_CAP = 0.10  # Maximum fraction of bankroll risked on any single trade (paper phase)
 
 
 def commission_aware_kelly(

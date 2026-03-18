@@ -156,8 +156,21 @@ class PaperBroker:
             denom = (1.0 / fill_price) - 1.0
             stake_abs = liability_abs / denom if denom > 0 else 0.0
 
-        # Insufficient funds guard
+        # Hard dollar cap per trade — second line of defence against Kelly oversizing
+        _MAX_PAPER_COST = 100.0
         cost = stake_abs if direction == "back" else liability_abs
+        if cost > _MAX_PAPER_COST:
+            logger.warning(
+                "Paper trade cost %.2f exceeds max %.2f — capping.",
+                cost, _MAX_PAPER_COST,
+            )
+            scale = _MAX_PAPER_COST / cost
+            filled_size *= scale
+            stake_abs *= scale
+            liability_abs *= scale
+            cost = _MAX_PAPER_COST
+
+        # Insufficient funds guard
         if cost > state.bankroll or cost <= 0:
             logger.warning(
                 "Paper execute skipped — cost %.2f exceeds bankroll %.2f or is zero.",

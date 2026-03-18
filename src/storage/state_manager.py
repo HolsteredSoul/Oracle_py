@@ -18,6 +18,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -131,17 +132,34 @@ class StateManager:
             return OracleState()
 
     def save(self, state: OracleState) -> None:
-        """Atomically persist state.
+        """Atomically persist state with retry for OneDrive file locking.
 
-        Writes to <path>.tmp then replaces the main file via Path.replace(),
-        which is atomic on POSIX and atomic-within-same-drive on Windows.
-        Identical pattern to llm/client.py _save_spend().
+        Writes to <path>.tmp then replaces the main file via Path.replace().
+        Retries up to 5 times with increasing delays to handle OneDrive locks.
         """
         state.last_updated = _utc_now()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
-        tmp.write_text(state.model_dump_json(indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+
+        for attempt in range(5):
+            try:
+                tmp.write_text(state.model_dump_json(indent=2), encoding="utf-8")
+                tmp.replace(self._path)
+                return
+            except PermissionError:
+                if attempt < 4:
+                    delay = 0.5 * (attempt + 1)
+                    logger.warning(
+                        "State save attempt %d/5 failed (file locked) — retrying in %.1fs",
+                        attempt + 1,
+                        delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "State save failed after 5 attempts — state may be stale on disk."
+                    )
+                    raise
 
     def add_trade(self, state: OracleState, trade: Trade) -> OracleState:
         """Append a Trade to history and save. Returns the mutated state."""

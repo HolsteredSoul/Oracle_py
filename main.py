@@ -157,6 +157,16 @@ def _analyse_and_trade(
     prior_p = state.priors.get(market_id, mid_price)
     p_fair = update_probability(prior_p, sentiment_delta, settings.risk.beta)
 
+    # Sanity gate: extreme divergence from mid_price likely means sign confusion.
+    # (e.g. LLM returns negative delta for "Under X Goals" at low implied prob.)
+    divergence = abs(p_fair - mid_price)
+    if divergence > 0.40:
+        logger.warning(
+            "Extreme divergence | market=%s p_fair=%.3f mid=%.3f delta=%.3f — skipping (likely sign confusion).",
+            market_id, p_fair, mid_price, sentiment_delta,
+        )
+        return
+
     # --- Market detail for accurate spread + liquidity ---
     try:
         detail = get_detail_fn(market_id)
