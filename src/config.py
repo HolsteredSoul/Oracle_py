@@ -57,6 +57,7 @@ class ScannerConfig(BaseModel):
     poll_interval_sec: int = Field(gt=0)
     manifold_min_volume: int = Field(ge=0)
     manifold_min_prob_range: Tuple[float, float]
+    betfair_event_types: list[int] = Field(default_factory=list)
 
     @field_validator("manifold_min_prob_range")
     @classmethod

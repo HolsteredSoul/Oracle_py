@@ -201,8 +201,21 @@ def get_markets(
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(hours=hours_ahead)
 
+    allowed_event_types = settings.scanner.betfair_event_types or []
+    mkt_filter = market_filter(
+        market_countries=country_codes,
+        **({
+            "event_type_ids": [str(e) for e in allowed_event_types]
+        } if allowed_event_types else {}),
+    )
+    if allowed_event_types:
+        logger.info(
+            "Betfair scan: filtering to event_type_ids=%s",
+            allowed_event_types,
+        )
+
     catalogue = client.betting.list_market_catalogue(
-        filter=market_filter(market_countries=country_codes),
+        filter=mkt_filter,
         market_projection=[
             "MARKET_START_TIME",
             "RUNNER_DESCRIPTION",
