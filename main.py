@@ -211,7 +211,7 @@ def _analyse_and_trade(
         return
 
     # --- Execution ---
-    if mode == "paper":
+    if mode in ("paper", "betfair-paper"):
         fill_price = p_ask if direction == "back" else p_bid
         state, trade = broker.execute(
             state=state,
