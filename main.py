@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import signal
 import time
 from datetime import datetime
@@ -21,7 +22,7 @@ from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.config import settings
-from src.enrichment.news import get_news_summary
+from src.enrichment.news import get_news_summary, rewrite_query
 from src.enrichment.trigger import should_trigger_deep
 from src.enrichment.x_sentiment import get_x_summary
 from src.execution.paper import PaperBroker
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 # Maximum markets to run through the intelligence layer per cycle.
 # Keeps LLM costs predictable during development.
-_MAX_MARKETS_PER_CYCLE = 5
+_MAX_MARKETS_PER_CYCLE = 15
 
 # Halts all new trade execution when this file exists.
 _KILL_SWITCH_PATH = Path("state/kill_switch.txt")
@@ -90,14 +91,18 @@ def _analyse_and_trade(
     market_id = market["id"]
     question = market["question"]
     mid_price = market["probability"]
-    search_query = question[:80]
+    runner_name = market.get("runner_name", "")
+    market_type = market.get("market_type", "")
 
     # --- Enrichment ---
+    search_query = rewrite_query(question, runner_name=runner_name, market_type=market_type)
     news = get_news_summary(search_query)
     x_data = get_x_summary(search_query.split()[:5])
 
     # --- Light scan ---
-    light_prompt = build_light_scan_prompt(question, mid_price, news)
+    light_prompt = build_light_scan_prompt(
+        question, mid_price, news, runner_name=runner_name, market_type=market_type
+    )
     raw = call_llm(light_prompt, tier="fast")
 
     if raw is None:
@@ -122,7 +127,10 @@ def _analyse_and_trade(
     response = light
     if should_trigger_deep(light.sentiment_delta, volatility_z=0.0, x_momentum=0.0):
         logger.info("Deep trigger fired for market %s", market_id)
-        deep_prompt = build_deep_trigger_prompt(question, mid_price, news, x_data)
+        deep_prompt = build_deep_trigger_prompt(
+            question, mid_price, news, x_data,
+            runner_name=runner_name, market_type=market_type,
+        )
         deep_raw = call_llm(deep_prompt, tier="deep")
 
         if deep_raw is not None:
@@ -160,7 +168,9 @@ def _analyse_and_trade(
         logger.debug("Market %s already resolved — skipping.", market_id)
         return
 
-    p_ask, p_bid = PaperBroker.derive_spread(detail["probability"])
+    # Use real Betfair back/lay prices where available; fall back to synthetic spread.
+    p_ask = detail.get("p_back") or PaperBroker.derive_spread(detail["probability"])[0]
+    p_bid = detail.get("p_lay") or PaperBroker.derive_spread(detail["probability"])[1]
     available_liquidity = detail.get("totalLiquidity", state.bankroll * 0.10)
 
     # --- Direction selection (pick best positive edge ≥ margin_min_paper) ---
@@ -298,6 +308,11 @@ def scan_cycle(
         else:
             markets = get_markets()
         logger.info("Scan cycle started (%s), found %d markets", mode, len(markets))
+
+        # Randomize order so we don't re-scan the same subset every cycle.
+        # betfair_scanner already sorts by market type priority, so shuffle within
+        # type-groups by using a stable approach: shuffle then re-sort by priority tier.
+        random.shuffle(markets)
 
         get_detail_fn = betfair_scanner.get_market_detail if is_betfair else get_market_detail
 

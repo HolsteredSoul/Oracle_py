@@ -9,7 +9,7 @@ downgrade_threshold_pct = 0.80
 news_sentiment_delta = 0.28
 x_momentum = 0.32
 volatility_z = 2.3
-margin_min_paper = 0.06
+margin_min_paper = 0.030
 margin_min_live = 0.015
 
 [risk]

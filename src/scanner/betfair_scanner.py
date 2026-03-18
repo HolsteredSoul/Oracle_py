@@ -12,20 +12,28 @@ without changing any pipeline logic:
     get_markets()                -> list[dict]
     get_market_detail(market_id) -> dict
 
-Dict shape (same keys as manifold scanner):
+Dict shape (same keys as manifold scanner, with Betfair extras):
     id            : str   — Betfair market ID (e.g. "1.247542121")
-    question      : str   — Market name
+    question      : str   — Market name (includes runner name where applicable)
+    runner_name   : str   — Name of the specific runner/selection
+    market_type   : str   — Betfair market type (e.g. MATCH_ODDS, WINNER)
     probability   : float — Implied probability from best back price (1 / price)
+    p_back        : float — Implied prob from real best back price (= p_ask)
+    p_lay         : float — Implied prob from real best lay price (= p_bid)
+    best_back_price: float — Real best back decimal odds
+    best_lay_price : float — Real best lay decimal odds
     volume        : float — total_matched for the market
     url           : str   — Betfair AU deep-link
     totalLiquidity: float — Sum of available back + lay volumes at best price
     isResolved    : bool  — True when status is CLOSED or SETTLED
     resolution    : str   — Always "MKT" (Betfair doesn't use YES/NO)
+    market_start_time: datetime | None — Event start time (UTC)
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import betfairlightweight
 from betfairlightweight.filters import market_filter, price_projection
@@ -44,18 +52,49 @@ _PROB_CEIL = 0.95
 # AU horse-racing markets have 8-20 runners each; empirical safe limit ~40 per call.
 _BOOK_BATCH_SIZE = 40
 
+# Market type priority: lower number = higher priority.
+# MATCH_ODDS and OVER_UNDER markets have active price discovery near events.
+_MARKET_TYPE_PRIORITY: dict[str, int] = {
+    "MATCH_ODDS": 0,
+    "MONEYLINE": 0,
+    "HALF_TIME": 1,
+    "OVER_UNDER_25_5": 1,
+    "OVER_UNDER_35_5": 1,
+    "CORRECT_SCORE": 2,
+    "WINNER": 3,
+    "OUTRIGHT_WINNER": 3,
+}
+_DEFAULT_MARKET_PRIORITY = 2  # for unknown types
+
+
+def _create_and_login() -> betfairlightweight.APIClient:
+    """Create a fresh Betfair API client and authenticate."""
+    client = betfairlightweight.APIClient(
+        username=settings.betfair_username,
+        password=settings.betfair_password,
+        app_key=settings.betfair_app_key,
+    )
+    client.login_interactive()
+    logger.info("Betfair interactive login successful.")
+    return client
+
 
 def _get_client() -> betfairlightweight.APIClient:
-    """Return (or lazily create) the authenticated Betfair API client."""
+    """Return (or lazily create) the authenticated Betfair API client.
+
+    Performs a lightweight session health check on each call and
+    re-authenticates transparently if the session has expired.
+    """
     global _client  # noqa: PLW0603
     if _client is None:
-        _client = betfairlightweight.APIClient(
-            username=settings.betfair_username,
-            password=settings.betfair_password,
-            app_key=settings.betfair_app_key,
-        )
-        _client.login_interactive()
-        logger.info("Betfair interactive login successful.")
+        _client = _create_and_login()
+    else:
+        try:
+            # Lightweight health check — triggers re-auth if session expired.
+            _client.betting.list_event_types()
+        except Exception:
+            logger.warning("Betfair session expired — re-authenticating.")
+            _client = _create_and_login()
     return _client
 
 
@@ -69,17 +108,23 @@ def _implied_prob(best_back_price: float | None) -> float | None:
     return round(1.0 / best_back_price, 6)
 
 
-def _liquidity_from_book(book) -> tuple[float | None, float]:
-    """Extract (probability, total_liquidity) from a market book.
+def _liquidity_from_book(
+    book,
+) -> tuple[float | None, float, float | None, float | None]:
+    """Extract (probability, total_liquidity, best_back_price, best_lay_price).
 
-    probability    = implied prob of the first runner with a valid back price
-                     in the tradeable range [PROB_FLOOR, PROB_CEIL].
-                     Returns None if no valid back price exists.
-    total_liquidity = sum of all available_to_back and available_to_lay sizes
-                      across all runners at the best price level.
+    probability      = implied prob of the first runner with a valid back price
+                       in the tradeable range [PROB_FLOOR, PROB_CEIL].
+                       Returns None if no valid back price exists.
+    total_liquidity  = sum of all available_to_back and available_to_lay sizes
+                       across all runners at the best price level.
+    best_back_price  = real decimal odds for best back offer (first valid runner).
+    best_lay_price   = real decimal odds for best lay offer (first valid runner).
     """
     prob: float | None = None
     total_liquidity = 0.0
+    best_back_price: float | None = None
+    best_lay_price: float | None = None
 
     for runner in book.runners or []:
         ex = runner.ex
@@ -88,17 +133,32 @@ def _liquidity_from_book(book) -> tuple[float | None, float]:
         if ex.available_to_back:
             total_liquidity += sum(o.size for o in ex.available_to_back)
             if prob is None:
-                p = _implied_prob(ex.available_to_back[0].price)
+                bp = ex.available_to_back[0].price
+                p = _implied_prob(bp)
                 if p is not None and _PROB_FLOOR <= p <= _PROB_CEIL:
                     prob = p
+                    best_back_price = bp
         if ex.available_to_lay:
             total_liquidity += sum(o.size for o in ex.available_to_lay)
+            if best_lay_price is None:
+                lp = ex.available_to_lay[0].price
+                if lp > 1.0:
+                    best_lay_price = lp
 
-    return prob, total_liquidity
+    return prob, total_liquidity, best_back_price, best_lay_price
 
 
 def _market_url(market_id: str) -> str:
     return f"https://www.betfair.com.au/exchange/plus/en/betting-type-link/{market_id}/"
+
+
+def _ensure_utc(dt: datetime | None) -> datetime | None:
+    """Ensure a datetime is timezone-aware (UTC)."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 # ---------------------------------------------------------------------------
@@ -108,20 +168,26 @@ def _market_url(market_id: str) -> str:
 def get_markets(
     limit: int = 100,
     country_codes: list[str] | None = None,
+    hours_ahead: int = 72,
 ) -> list[dict]:
     """Fetch and filter live Australian Betfair exchange markets.
 
-    Applies the same probability range filter as the Manifold scanner
-    (settings.scanner.manifold_min_prob_range) so the same config.toml
-    controls both scanners.
+    Prioritises near-term MATCH_ODDS and OVER_UNDER markets over long-term
+    outright winner futures. Markets are sorted by market type priority then
+    by start time (ascending) so the agent focuses on events with active
+    price discovery and news flow.
 
     Args:
         limit:         Maximum number of markets to return after filtering.
         country_codes: ISO country codes to filter by. Defaults to ["AU"].
+        hours_ahead:   Only include markets starting within this many hours.
+                       Markets with no start time are included as a fallback.
 
     Returns:
         List of market dicts with keys:
-            id, question, probability, volume, url, totalLiquidity, isResolved.
+            id, question, runner_name, market_type, probability, p_back, p_lay,
+            best_back_price, best_lay_price, volume, url, totalLiquidity,
+            isResolved, market_start_time.
 
     Raises:
         betfairlightweight.exceptions.APIError: On API or auth errors.
@@ -132,9 +198,18 @@ def get_markets(
     client = _get_client()
     prob_low, prob_high = settings.scanner.manifold_min_prob_range
 
+    now = datetime.now(timezone.utc)
+    cutoff = now + timedelta(hours=hours_ahead)
+
     catalogue = client.betting.list_market_catalogue(
         filter=market_filter(market_countries=country_codes),
-        market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION", "EVENT", "EVENT_TYPE"],
+        market_projection=[
+            "MARKET_START_TIME",
+            "RUNNER_DESCRIPTION",
+            "EVENT",
+            "EVENT_TYPE",
+            "MARKET_DESCRIPTION",
+        ],
         max_results=min(limit * 3, 200),  # cap to avoid excessive batches
     )
 
@@ -163,7 +238,12 @@ def get_markets(
         if book.status in _RESOLVED_STATUSES or book.status == "SUSPENDED":
             continue
 
-        prob, total_liquidity = _liquidity_from_book(book)
+        # Start time filtering: skip markets that start more than hours_ahead from now.
+        start_dt = _ensure_utc(getattr(cat, "market_start_time", None))
+        if start_dt is not None and start_dt > cutoff:
+            continue  # Too far in the future — likely a stale futures market
+
+        prob, total_liquidity, best_back_price, best_lay_price = _liquidity_from_book(book)
 
         # prob is None when no back price falls in [PROB_FLOOR, PROB_CEIL]
         if prob is None or not (prob_low <= prob <= prob_high):
@@ -171,27 +251,67 @@ def get_markets(
 
         total_matched = getattr(book, "total_matched", 0.0) or 0.0
 
-        event_name = (cat.event.name if cat.event else None) or ""
-        market_name = cat.market_name or cat.market_id
-        question = f"{event_name} {market_name}".strip() if event_name else market_name
+        _event = getattr(cat, "event", None)
+        event_name = (getattr(_event, "name", None) if _event else None) or ""
+        market_name = getattr(cat, "market_name", None) or cat.market_id
+
+        # Market type from MARKET_DESCRIPTION projection
+        market_type = ""
+        _desc = getattr(cat, "description", None)
+        if _desc is not None:
+            market_type = getattr(_desc, "market_type", "") or ""
+
+        # Runner name — the specific selection being priced
+        runner_name = ""
+        _runners = getattr(cat, "runners", None)
+        if _runners:
+            runner_name = getattr(_runners[0], "runner_name", "") or ""
+
+        # Build a descriptive question string that includes who/what is being priced
+        if runner_name:
+            question = (
+                f"{event_name} {market_name} — {runner_name}".strip()
+                if event_name
+                else f"{market_name} — {runner_name}"
+            )
+        else:
+            question = f"{event_name} {market_name}".strip() if event_name else market_name
+
+        # Compute real implied probs from back/lay prices
+        p_back = round(1.0 / best_back_price, 6) if best_back_price else None
+        p_lay = round(1.0 / best_lay_price, 6) if best_lay_price else None
 
         markets.append({
             "id": cat.market_id,
             "question": question,
+            "runner_name": runner_name,
+            "market_type": market_type,
             "probability": prob,
+            "p_back": p_back,
+            "p_lay": p_lay,
+            "best_back_price": best_back_price,
+            "best_lay_price": best_lay_price,
             "volume": total_matched,
             "url": _market_url(cat.market_id),
             "totalLiquidity": total_liquidity,
             "isResolved": False,
+            "market_start_time": start_dt,
         })
 
-        if len(markets) >= limit:
-            break
+    # Sort: MATCH_ODDS first, then by start time ascending (None last)
+    def _sort_key(m: dict) -> tuple[int, datetime]:
+        type_priority = _MARKET_TYPE_PRIORITY.get(m["market_type"], _DEFAULT_MARKET_PRIORITY)
+        start = m["market_start_time"] or datetime(9999, 12, 31, tzinfo=timezone.utc)
+        return (type_priority, start)
+
+    markets.sort(key=_sort_key)
+    markets = markets[:limit]
 
     logger.info(
-        "Betfair scan: %d markets after filtering (catalogue size %d)",
+        "Betfair scan: %d markets after filtering (catalogue size %d, cutoff +%dh)",
         len(markets),
         len(catalogue),
+        hours_ahead,
     )
     return markets
 
@@ -200,31 +320,58 @@ def get_market_detail(market_id: str) -> dict:
     """Fetch full detail for a single Betfair market.
 
     Returns the same dict shape as manifold.get_market_detail() so
-    PaperBroker and the pipeline work unmodified.
+    PaperBroker and the pipeline work unmodified. Includes real back/lay
+    prices and implied probabilities from the live order book.
+
+    Automatically retries once after re-authentication if the session
+    has expired.
 
     Args:
         market_id: Betfair market ID (e.g. "1.247542121").
 
     Returns:
         Dict with keys:
-            id, question, probability, volume, url,
+            id, question, runner_name, market_type, probability, p_back, p_lay,
+            best_back_price, best_lay_price, volume, url,
             totalLiquidity, isResolved, resolution.
 
     Raises:
         ValueError: If the market book cannot be retrieved.
         betfairlightweight.exceptions.APIError: On API errors.
     """
-    client = _get_client()
+    return _fetch_market_detail(market_id, retry=True)
 
-    catalogue = client.betting.list_market_catalogue(
-        filter=market_filter(market_ids=[market_id]),
-        market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION", "EVENT", "EVENT_TYPE"],
-        max_results=1,
-    )
-    books = client.betting.list_market_book(
-        market_ids=[market_id],
-        price_projection=price_projection(price_data=["EX_BEST_OFFERS"]),
-    )
+
+def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
+    """Internal implementation with optional retry on session expiry."""
+    try:
+        client = _get_client()
+
+        catalogue = client.betting.list_market_catalogue(
+            filter=market_filter(market_ids=[market_id]),
+            market_projection=[
+                "MARKET_START_TIME",
+                "RUNNER_DESCRIPTION",
+                "EVENT",
+                "EVENT_TYPE",
+                "MARKET_DESCRIPTION",
+            ],
+            max_results=1,
+        )
+        books = client.betting.list_market_book(
+            market_ids=[market_id],
+            price_projection=price_projection(price_data=["EX_BEST_OFFERS"]),
+        )
+    except Exception as exc:
+        if retry:
+            logger.warning(
+                "Market detail fetch failed for %s (%s) — re-authenticating and retrying.",
+                market_id, exc,
+            )
+            global _client  # noqa: PLW0603
+            _client = _create_and_login()
+            return _fetch_market_detail(market_id, retry=False)
+        raise
 
     if not books:
         raise ValueError(f"No market book returned for market_id={market_id!r}")
@@ -236,18 +383,47 @@ def get_market_detail(market_id: str) -> dict:
     is_resolved = status in _RESOLVED_STATUSES
     total_matched = getattr(book, "total_matched", 0.0) or 0.0
 
-    prob, total_liquidity = _liquidity_from_book(book)
+    prob, total_liquidity, best_back_price, best_lay_price = _liquidity_from_book(book)
     # Fall back to 0.5 for detail calls — caller uses this as settlement price
     if prob is None:
         prob = 0.5
-    event_name = (cat.event.name if cat and cat.event else None) or ""
-    market_name = (cat.market_name if cat else None) or market_id
-    name = f"{event_name} {market_name}".strip() if event_name else market_name
+
+    _event = getattr(cat, "event", None) if cat else None
+    event_name = (getattr(_event, "name", None) if _event else None) or ""
+    market_name = (getattr(cat, "market_name", None) if cat else None) or market_id
+
+    market_type = ""
+    _desc = getattr(cat, "description", None) if cat else None
+    if _desc is not None:
+        market_type = getattr(_desc, "market_type", "") or ""
+
+    runner_name = ""
+    _runners = getattr(cat, "runners", None) if cat else None
+    if _runners:
+        runner_name = getattr(_runners[0], "runner_name", "") or ""
+
+    if runner_name:
+        name = (
+            f"{event_name} {market_name} — {runner_name}".strip()
+            if event_name
+            else f"{market_name} — {runner_name}"
+        )
+    else:
+        name = f"{event_name} {market_name}".strip() if event_name else market_name
+
+    p_back = round(1.0 / best_back_price, 6) if best_back_price else None
+    p_lay = round(1.0 / best_lay_price, 6) if best_lay_price else None
 
     return {
         "id": market_id,
         "question": name,
+        "runner_name": runner_name,
+        "market_type": market_type,
         "probability": prob,
+        "p_back": p_back,
+        "p_lay": p_lay,
+        "best_back_price": best_back_price,
+        "best_lay_price": best_lay_price,
         "volume": total_matched,
         "url": _market_url(market_id),
         "totalLiquidity": total_liquidity,

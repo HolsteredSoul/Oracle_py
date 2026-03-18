@@ -27,6 +27,8 @@ def build_light_scan_prompt(
     question: str,
     mid_price: float,
     news_summary: str,
+    runner_name: str = "",
+    market_type: str = "",
 ) -> str:
     """Build a light batch scan prompt.
 
@@ -34,21 +36,30 @@ def build_light_scan_prompt(
         question: The prediction market question text.
         mid_price: Current market mid-price (0–1 probability).
         news_summary: Recent headlines/descriptions as a single string.
+        runner_name: Specific selection being priced (e.g. "Sydney Swans").
+        market_type: Betfair market type (e.g. "MATCH_ODDS", "WINNER").
 
     Returns:
         Full prompt string to pass to call_llm(tier="fast").
     """
+    selection_ctx = ""
+    if runner_name:
+        selection_ctx = f"\nSelection being priced: {runner_name}"
+    if market_type:
+        selection_ctx += f"\nMarket type: {market_type}"
+
     return f"""{_SYSTEM_LIGHT}
 
-Market question: {question}
-Current mid-price (probability): {mid_price:.3f}
+Market question: {question}{selection_ctx}
+Current mid-price (implied probability): {mid_price:.3f}
 Recent news: {news_summary or "No recent news available."}
 
-Even when no news is available, reason about whether the current mid-price looks \
-fair or mispriced using your prior knowledge of the topic, known market biases \
-(e.g. longshot bias in racing: punters systematically overbid longshots and \
-underbid favourites), or any other relevant factors. Only return sentiment_delta=0 \
-if you have genuinely no view at all.
+Reason about whether the current mid-price looks fair or mispriced. Consider:
+- Your knowledge of this sport, team, or event
+- Known market biases (e.g. longshot bias in racing: punters overbid longshots, underbid favourites)
+- Whether {mid_price:.3f} is plausible given the number of competitors and typical outcomes
+- Any relevant context from the news above
+Only return sentiment_delta=0 if you genuinely have no view at all.
 
 Output this JSON structure exactly:
 {{
@@ -63,6 +74,8 @@ def build_deep_trigger_prompt(
     mid_price: float,
     news_summary: str,
     x_summary: str,
+    runner_name: str = "",
+    market_type: str = "",
 ) -> str:
     """Build a deep trigger analysis prompt.
 
@@ -71,21 +84,31 @@ def build_deep_trigger_prompt(
         mid_price: Current market mid-price (0–1 probability).
         news_summary: Recent news headlines as a single string.
         x_summary: Recent X/Twitter posts as a single string.
+        runner_name: Specific selection being priced (e.g. "Sydney Swans").
+        market_type: Betfair market type (e.g. "MATCH_ODDS", "WINNER").
 
     Returns:
         Full prompt string to pass to call_llm(tier="deep").
     """
+    selection_ctx = ""
+    if runner_name:
+        selection_ctx = f"\nSelection being priced: {runner_name}"
+    if market_type:
+        selection_ctx += f"\nMarket type: {market_type}"
+
     return f"""{_SYSTEM_DEEP}
 
-Market question: {question}
-Current mid-price (probability): {mid_price:.3f}
+Market question: {question}{selection_ctx}
+Current mid-price (implied probability): {mid_price:.3f}
 Recent news: {news_summary or "No recent news available."}
 X/Twitter sentiment: {x_summary or "No X data available."}
 
 Step-by-step:
 1. Synthesize all news and X/Twitter signals.
-2. Estimate the directional impact and its magnitude.
-3. Identify the key uncertainties.
+2. Consider your prior knowledge of this sport, team, or competition.
+3. Estimate whether {mid_price:.3f} is fair, too high, or too low.
+4. Estimate the directional impact and its magnitude.
+5. Identify the key uncertainties.
 
 Output this JSON structure exactly:
 {{
