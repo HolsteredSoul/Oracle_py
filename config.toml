@@ -9,7 +9,7 @@ downgrade_threshold_pct = 0.80
 news_sentiment_delta = 0.28
 x_momentum = 0.32
 volatility_z = 2.3
-margin_min_paper = 0.025
+margin_min_paper = 0.06
 margin_min_live = 0.015
 
 [risk]
@@ -18,7 +18,7 @@ drawdown_throttle_pct = 0.20
 drawdown_throttle_factor = 0.50
 confidence_floor = 52
 commission_pct = 0.05
-beta = 0.15
+beta = 0.50
 liquidity_safety_factor = 0.70
 kelly_base_fraction = 0.50
 
