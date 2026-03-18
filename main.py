@@ -277,14 +277,29 @@ def _settle_betfair_positions(
             )
             continue
 
+        # Phase 5A.1: always update last_seen_price while market is still open.
+        # This becomes the closing_price approximation at settlement.
+        current_prob = detail.get("probability")
+        if current_prob is not None and not detail.get("isResolved"):
+            state.positions[market_id].last_seen_price = current_prob
+
         if detail.get("isResolved"):
             resolution = detail.get("resolution", "MKT")
             res_prob = detail.get("probability", 0.5)
+            # The closing_price is the last_seen_price captured in a previous cycle
+            # (before the market resolved). May be None for positions opened before
+            # this feature was added — that's fine, CLV will be None for those trades.
+            closing_price = state.positions[market_id].last_seen_price
             try:
-                state, _ = broker.settle_position(state, market_id, resolution, res_prob)
+                state, _ = broker.settle_position(
+                    state, market_id, resolution, res_prob,
+                    closing_price=closing_price,
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.error("Settlement failed for %s: %s", market_id, exc)
 
+    # Persist updated last_seen_price values even when no settlements occurred
+    state_manager.save(state)
     return state
 
 

@@ -67,6 +67,9 @@ class Trade(BaseModel):
     exit_timestamp: Optional[str] = None
     commission_paid: Optional[float] = None
     stake_abs: Optional[float] = None               # stored for dashboard display
+    # Phase 5A.1 — CLV tracking:
+    closing_price: Optional[float] = None           # last market price before kickoff suspension
+    clv: Optional[float] = None                     # closing line value (positive = good entry)
 
 
 class Position(BaseModel):
@@ -82,6 +85,8 @@ class Position(BaseModel):
     entry_timestamp: str                             # ISO-8601 UTC
     trade_id: str                                    # FK to Trade record
     p_fair_at_entry: float
+    # Phase 5A.1 — updated each scan cycle; becomes closing_price at settlement
+    last_seen_price: Optional[float] = None
 
 
 class OracleState(BaseModel):

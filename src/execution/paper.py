@@ -247,6 +247,7 @@ class PaperBroker:
         market_id: str,
         resolution: str,
         resolution_probability: float,
+        closing_price: float | None = None,    # Phase 5A.1
     ) -> tuple[OracleState, Trade]:
         """Settle an open position on market resolution.
 
@@ -263,6 +264,7 @@ class PaperBroker:
             market_id:              Market being settled.
             resolution:             "YES", "NO", or "MKT".
             resolution_probability: Final probability (used for MKT resolution).
+            closing_price:          Last market price before suspension (Phase 5A.1 CLV).
 
         Returns:
             (updated_state, settled_trade)
@@ -306,6 +308,16 @@ class PaperBroker:
 
         exit_ts = _utc_now()
 
+        # Phase 5A.1: Compute CLV
+        # back: CLV = closing_price - entry_price  (positive = market moved toward our view)
+        # lay:  CLV = entry_price - closing_price  (positive = market moved toward our view)
+        clv = None
+        if closing_price is not None:
+            if direction == "back":
+                clv = round(closing_price - entry_price, 6)
+            else:  # lay
+                clv = round(entry_price - closing_price, 6)
+
         # Find and update the Trade record in history
         settled_trade: Trade | None = None
         for i, t in enumerate(state.trade_history):
@@ -317,6 +329,8 @@ class PaperBroker:
                     "pnl": round(pnl, 4),
                     "exit_timestamp": exit_ts,
                     "commission_paid": round(commission_paid, 4),
+                    "closing_price": closing_price,      # Phase 5A.1
+                    "clv": clv,                          # Phase 5A.1
                 })
                 state.trade_history[i] = updated
                 settled_trade = updated
@@ -334,10 +348,11 @@ class PaperBroker:
         state = self._sm.update_position(state, market_id, None)
 
         logger.info(
-            "Settled | market=%s resolution=%s pnl=%.2f bankroll=%.2f",
+            "Settled | market=%s resolution=%s pnl=%.2f clv=%s bankroll=%.2f",
             market_id,
             resolution,
             pnl,
+            f"{clv:+.4f}" if clv is not None else "N/A",
             state.bankroll,
         )
         return state, settled_trade

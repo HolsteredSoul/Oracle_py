@@ -71,7 +71,7 @@ def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> 
         })
     df = pd.DataFrame(rows)
     # Convert timestamps to datetime (errors='coerce' handles the "start" placeholder)
-    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     return df
 
@@ -187,6 +187,90 @@ def render_pnl_panel(trade_history: list[dict]) -> None:
         legend=dict(orientation="h"),
     )
     st.plotly_chart(fig, use_container_width=True)
+
+
+def render_clv_panel(trade_history: list[dict]) -> None:
+    """Phase 5A.1: Closing Line Value panel — per-trade CLV + aggregate."""
+    st.subheader("Closing Line Value (CLV)")
+
+    settled_with_clv = [
+        t for t in trade_history
+        if t.get("status") == "settled" and t.get("clv") is not None
+    ]
+
+    if not settled_with_clv:
+        st.info("No settled trades with CLV data yet. CLV is recorded at settlement.")
+        return
+
+    df = pd.DataFrame(settled_with_clv)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
+    df = df.sort_values("timestamp").reset_index(drop=True)
+
+    avg_clv = df["clv"].mean()
+    total_trades_clv = len(df)
+    positive_clv_pct = (df["clv"] > 0).sum() / total_trades_clv * 100
+    cumulative_clv = df["clv"].cumsum()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Avg CLV", f"{avg_clv:+.4f}",
+                delta="Edge detected" if avg_clv > 0 else "No edge",
+                delta_color="normal" if avg_clv > 0 else "inverse")
+    col2.metric("CLV+ Rate", f"{positive_clv_pct:.0f}%",
+                delta=f"{total_trades_clv} trades")
+    col3.metric("Cumulative CLV", f"{cumulative_clv.iloc[-1]:+.4f}")
+
+    colors = ["#00CC96" if c > 0 else "#EF553B" for c in df["clv"]]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=list(range(1, len(df) + 1)),
+        y=df["clv"],
+        marker_color=colors,
+        name="Trade CLV",
+    ))
+    fig.add_trace(go.Scatter(
+        x=list(range(1, len(df) + 1)),
+        y=cumulative_clv,
+        mode="lines",
+        line=dict(color="#636EFA", width=2),
+        name="Cumulative CLV",
+        yaxis="y2",
+    ))
+    fig.update_layout(
+        xaxis_title="Trade #",
+        yaxis_title="CLV",
+        yaxis2=dict(title="Cumulative CLV", overlaying="y", side="right"),
+        margin=dict(l=0, r=0, t=20, b=0),
+        height=280,
+        legend=dict(orientation="h"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Phase 5A.1 exit gate interpretation
+    if total_trades_clv >= 100:
+        if avg_clv > 0.005:
+            st.success(
+                f"Positive CLV across {total_trades_clv} trades — signal has real edge. "
+                f"Phase 5A.1 exit gate: PASS. Proceed to Phase 5 backtesting."
+            )
+        elif avg_clv > 0:
+            st.warning(
+                f"Marginally positive CLV ({avg_clv:+.4f}) — edge is thin. "
+                f"Consider proceeding to Phase 5A.2 (statistical model) to strengthen signal."
+            )
+        else:
+            st.error(
+                f"Negative CLV across {total_trades_clv} trades — signal does not beat closing line. "
+                f"Phase 5A.1 exit gate: FAIL. Proceed to Phase 5A.2 (statistical data integration). "
+                f"Do NOT deploy live money with current signal."
+            )
+    elif total_trades_clv >= 30:
+        direction_text = "positive" if avg_clv > 0 else "negative"
+        st.caption(
+            f"Preliminary CLV is {direction_text} ({avg_clv:+.4f}) across {total_trades_clv} trades. "
+            f"Need 100+ for Phase 5A.1 exit gate."
+        )
+    else:
+        st.caption(f"Collecting data — {total_trades_clv}/100 trades with CLV recorded.")
 
 
 def render_position_table(positions: dict) -> None:
@@ -306,6 +390,7 @@ def main() -> None:
         render_drawdown_panel(drawdown_df)
 
     render_pnl_panel(trade_history)
+    render_clv_panel(trade_history)    # Phase 5A.1
 
     st.divider()
 
