@@ -418,3 +418,158 @@ config.py ──► scanner/manifold.py ──► llm/client.py ──► llm/pr
 - [ ] `MAX_SINGLE_BET_AUD = 20.0` hard limit verified in code (not just config)
 - [ ] `.env` is in `.gitignore` and not committed
 - [ ] Dashboard shows real-time P&L, drawdown, and LLM cost before first live bet
+
+
+---
+
+## Phase 5A: Intelligence Layer Upgrade (NEW — Added March 2026)
+
+**Goal:** Replace LLM-headline signal with a multi-source intelligence stack that has measurable edge. The current LLM-headline approach validates the pipeline but is unlikely to produce sustained profit against Betfair exchange participants. This phase upgrades the brain while keeping the body intact.
+
+### Context: Why This Phase Was Added
+
+During Phase 4 paper trading, the following was observed:
+- The pipeline is mechanically sound — scanner, enrichment, LLM, Bayesian updater, Kelly sizing, risk gates, execution, settlement, and dashboard all work end-to-end.
+- However, the LLM intelligence layer (Grok-fast reading news headlines) produces signals that the market has already priced in. Betfair exchange prices reflect the collective knowledge of professional syndicates with statistical models, lineup scrapers, and years of domain data. An LLM reading day-old headlines cannot consistently outperform this.
+- The "longshot bias" the LLM frequently cites is a real phenomenon in bookmaker markets but is significantly weaker on Betfair (an exchange where participants trade against each other).
+- Without a stronger signal source, live money deployment would be gambling with sophisticated accounting — not edge-based trading.
+
+### Tasks
+
+**5A.1 — Closing Line Value (CLV) Tracking**
+
+Add a diagnostic metric to every trade that measures whether Oracle's entry price was better than the final pre-kickoff price (closing line). This is the industry standard for measuring betting edge.
+
+```python
+# In state_manager.py — add to Trade model:
+closing_price: Optional[float] = None    # final Betfair price at market suspension
+clv: Optional[float] = None             # entry_price - closing_price (positive = good)
+```
+
+**Implementation:**
+- At settlement, fetch the market's final probability before suspension from Betfair
+- Compute `CLV = entry_implied_prob - closing_implied_prob` for backs (`closing - entry` for lays)
+- Positive CLV = Oracle entered at a better price than the market closed at
+- Track aggregate CLV in the dashboard as a new panel
+
+**Why this matters:** If aggregate CLV is negative after 100+ trades, the signal is not profitable regardless of short-term P&L variance. If CLV is positive, the signal has real edge even if individual trades lose. This answers the fundamental question: "Does Oracle know something the market doesn't?"
+
+**Exit gate:** Run for 100+ paper trades. If aggregate CLV ≤ 0, proceed to 5A.2 (upgrade signal). If CLV > 0, the current signal may have edge — proceed to standard Phase 5 backtesting.
+
+---
+
+**5A.2 — Statistical Data Integration**
+
+Replace LLM-headlines as the primary signal with actual sports statistics.
+
+**Data sources (pick one to start):**
+- `football-data.org` — free, covers A-League, EPL, Bundesliga
+- `Sportmonks` — paid, comprehensive coverage including xG, lineups, H2H
+- `FBref` / `Understat` — free xG data, scrapable
+- `AFL Tables` / `Footywire` — free AFL stats
+
+**New module:** `src/enrichment/stats.py`
+```python
+def get_match_stats(home_team: str, away_team: str) -> MatchStats:
+    """Fetch xG, form (last 5/10), H2H record, home/away splits."""
+    ...
+
+class MatchStats(BaseModel):
+    home_xg_avg_5: float        # avg xG over last 5 home matches
+    away_xg_avg_5: float        # avg xG over last 5 away matches
+    home_form_pts_5: float      # points per game last 5
+    away_form_pts_5: float
+    h2h_home_win_pct: float     # head-to-head home win rate
+    home_goals_scored_avg: float
+    away_goals_conceded_avg: float
+    ...
+```
+
+**New module:** `src/strategy/statistical_model.py`
+```python
+def predict_match_odds(stats: MatchStats) -> dict[str, float]:
+    """Return {"home": p, "draw": p, "away": p} from statistical model."""
+    # Start simple: logistic regression on xG + form
+    # Upgrade later: XGBoost or neural net
+    ...
+```
+
+**Integration with existing pipeline:**
+- The statistical model produces `p_model` (replaces `p_mid` as the Bayesian prior)
+- The LLM still runs but now receives statistical context alongside news
+- The Bayesian updater applies the LLM's `sentiment_delta` on top of `p_model` instead of `p_mid`
+- This means: `p_fair = expit(logit(p_model) + beta * sentiment_delta)`
+
+**Why this is better:** A statistical model trained on xG data produces calibrated probabilities. The LLM adds qualitative overlays (injuries, morale, travel fatigue) that statistics miss. Neither alone is sufficient; together they cover both quantitative and qualitative edges.
+
+---
+
+**5A.3 — Pre-Match Lineup Ingestion (Optional — Time-Sensitive Alpha)**
+
+Team lineups are announced 60–90 minutes before kickoff. This is a genuine informational edge window: the market takes time to fully adjust to unexpected lineup changes.
+
+**New module:** `src/enrichment/lineups.py`
+```python
+def get_lineups(match_id: str) -> LineupData | None:
+    """Fetch announced lineups via Sportmonks/API-Football.
+    Returns None if lineups not yet announced."""
+    ...
+
+def lineup_surprise(announced: list[str], expected: list[str]) -> list[str]:
+    """Return list of surprise inclusions/exclusions."""
+    ...
+```
+
+**Integration:** When lineups are available, the deep trigger fires automatically and the LLM receives the lineup diff as additional context. This is where LLMs genuinely add value — interpreting *significance* of changes.
+
+**Timing:** This requires the scan interval to be reduced to 5–10 minutes during the 90-minute pre-match window. Add a `pre_match_fast_scan` mode that activates when events are imminent.
+
+---
+
+**Phase 5A Exit Gate:**
+- [ ] CLV tracking implemented and running for 100+ paper trades
+- [ ] If CLV ≤ 0: statistical model integrated and producing calibrated probabilities
+- [ ] Statistical model calibration plot shows < 10% systematic error across probability bins
+- [ ] LLM prompts updated to receive statistical model output as context
+- [ ] At least one sports data API integrated and returning match-level statistics
+- [ ] Agent paper-trades with upgraded signal for ≥ 1 week before proceeding to Phase 5 backtesting
+
+---
+
+## Updated Go/No-Go Checklist Before Live Money
+
+*Replaces the original checklist — adds CLV and signal-quality requirements.*
+
+- [ ] All test files pass with zero failures
+- [ ] Paper trading ran for ≥ 2 weeks with no state corruption
+- [ ] **CLV is positive across 100+ paper trades** (most critical gate)
+- [ ] Backtest Sharpe > 0 on held-out data
+- [ ] Calibration plot reviewed — statistical model + LLM overlay within 10% across all bins
+- [ ] Kill switch tested: touching `state/kill_switch.txt` halts new bets within one cycle
+- [ ] OMS reconciliation tested: manually place a Betfair order in test market, confirm agent detects and tracks it
+- [ ] Max drawdown in paper + backtest phases both < 30%
+- [ ] `MAX_SINGLE_BET_AUD = 20.0` hard limit verified in code (not just config)
+- [ ] `MAX_DAILY_LOSS_AUD = 100.0` kill switch verified in code
+- [ ] `.env` is in `.gitignore` and not committed
+- [ ] Dashboard shows real-time P&L, drawdown, CLV, and LLM cost before first live bet
+- [ ] Statistical model is integrated — LLM is NOT the sole signal source
+- [ ] Market type filter restricts to MATCH_ODDS, DRAW_NO_BET, WINNER only (no multi-runner derivative markets until runner mapping is properly implemented)
+
+---
+
+## Lessons Learned During Phase 4 (March 2026)
+
+Documenting issues discovered during paper trading for future reference:
+
+1. **LLM delta sign confusion on Under/Over markets.** The LLM doesn't inherently know that `sentiment_delta > 0` should mean "this selection is more likely." For markets like "Under 7.5 Goals" at low implied probability, the LLM returned negative delta (meaning "too low") when positive delta was correct. **Fix:** Explicit direction instruction in the prompt telling the LLM what positive/negative delta means for the specific selection.
+
+2. **Runner mapping ambiguity on multi-runner markets.** Betfair Over/Under, Asian Handicap, Correct Score, and BTTS markets have multiple runners. The scanner grabbed the first runner's price, which didn't necessarily correspond to the named selection. **Fix (interim):** Restrict scanning to `MATCH_ODDS`, `DRAW_NO_BET`, and `WINNER` market types where runner identity is unambiguous. **Fix (permanent — Phase 5A):** Match runners by `selection_id` across catalogue and book responses.
+
+3. **Kelly oversizing on extreme edges.** Raw Kelly fractions > 0.90 occurred when the delta sign bug produced extreme `p_fair` divergences. The 25% hard cap was insufficient; two consecutive max-sized trades consumed 40% of bankroll. **Fix:** Reduced hard cap to 10% for paper trading. Added absolute dollar cap ($100 per trade).
+
+4. **Betfair session expiry.** Interactive login sessions expire after several hours. The scanner failed silently, causing all subsequent cycles to error. **Fix:** Health check on every `_get_client()` call with transparent re-authentication on failure.
+
+5. **OneDrive file locking.** Atomic writes (`write .tmp → rename .json`) failed intermittently due to OneDrive syncing. **Fix:** Retry loop with exponential backoff (5 attempts, 0.5s–2.5s delays).
+
+6. **News enrichment returned empty for niche markets.** NewsData.io had zero coverage for Australian greyhound racing, regional horse meets, and niche sports futures. The LLM defaulted to `delta=0` with no information, producing zero edge. **Fix:** Google News RSS fallback, query rewriting for Betfair market names, and event type filtering to focus on major sports with news coverage.
+

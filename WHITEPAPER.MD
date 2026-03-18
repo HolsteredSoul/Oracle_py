@@ -469,3 +469,94 @@ pytest-asyncio>=0.23
 > **NewsData.io:** REST API via `httpx`. Free tier: 200 credits/day.
 > **Manifold:** Public REST API, no auth required for read-only access.
 > **Betfair:** `betfairlightweight` library (Phase 4 only).
+
+
+---
+
+## 11. Edge Source Assessment & Upgrade Path
+
+*Added March 2026 after Phase 4 paper trading validation.*
+
+### 11.1 Honest Assessment of the Current Intelligence Layer
+
+The infrastructure (scanner, risk management, Kelly sizing, settlement, dashboard) is production-quality and battle-tested through Phase 4. However, **the current intelligence layer — LLM reading news headlines — is unlikely to generate sustained profit on live Betfair exchange markets.** This section explains why and outlines the upgrade path.
+
+**The adversary is strong.** Betfair exchange prices are not soft bookmaker odds. They are set by thousands of participants including professional syndicates with statistical models, real-time team sheet scrapers, injury databases, Elo rating systems, expected goals (xG) models, and decades of domain expertise. By the time a price is live on the exchange, it already incorporates most publicly available information.
+
+**The current signal is weak.** The agent reads a few news headlines (via NewsData.io and Google News RSS) and asks an LLM (Grok-fast or Claude-Sonnet) to return a `sentiment_delta`. This is a qualitative, vibes-based assessment — e.g., "Macarthur lost 4-1 recently, so they're probably worse than priced." That reasoning, while correct, is exactly what the market has already priced in. The headlines the LLM reads are hours to days old; the market moved on that information long before the agent saw it.
+
+**The math is marginal.** Betfair takes 5% commission on net winnings. The real spread on match-odds markets is typically 2–4%. To overcome commission + spread, the agent needs to be right by more than ~7–9% consistently. The LLM's delta adjustments (typically 0.05–0.20 in probability space) are in the right ballpark mathematically, but they need to be *systematically correct* — not just plausible-sounding. There is no evidence yet that "LLM reads headlines" produces calibrated probability improvements over Betfair consensus.
+
+**The longshot bias is already priced.** The LLM frequently cites "longshot bias" (punters overbet longshots, underbet favorites) as a reason to trade. This is a real phenomenon in bookmaker markets, but Betfair is an exchange — the bias is significantly weaker because participants are trading against each other, not against a bookmaker's margin. The LLM does not distinguish between bookmaker odds and exchange odds.
+
+### 11.2 What Would Make This Profitable
+
+The platform is ready. The intelligence layer needs upgrading. These are ranked by expected impact:
+
+#### Tier 1: Statistical Data Integration (Highest Impact)
+
+Replace or supplement LLM-headline analysis with actual sports data. APIs such as football-data.org, Sportmonks, FBref, or AFL Tables provide match statistics — expected goals (xG), shots on target, possession, head-to-head records, team form over last 5/10/20 matches.
+
+A simple logistic regression or gradient-boosted model trained on xG and form data would produce better-calibrated probability estimates than an LLM reading headlines. The LLM can still add value for qualitative factors (manager sacked, dressing room turmoil, travel fatigue) but should not be the primary signal source.
+
+**Implementation path:**
+```
+src/enrichment/stats.py          — fetch xG, form, H2H from a sports data API
+src/strategy/statistical_model.py — logistic/XGBoost model producing p_fair
+src/llm/prompts.py               — LLM receives statistical model output + news
+                                    as inputs; provides adjustment delta on top
+```
+
+The Bayesian framework already supports this: replace `p_mid` (market price) as the prior with the statistical model's `p_model`, then use the LLM delta as a secondary adjustment.
+
+#### Tier 2: Pre-Match Team Sheet Edge (Time-Sensitive Alpha)
+
+Team lineups are announced 60–90 minutes before kickoff. If the agent ingests lineups and compares them to expected lineups (key player missing, unexpected formation change, debut player starting), that is a genuine informational edge that moves markets. The window is narrow (60–90 minutes), and the agent must act before the market fully adjusts.
+
+**Implementation path:**
+- Subscribe to a lineup API (e.g., Sportmonks, API-Football)
+- Compare announced XI to predicted XI
+- Trigger a deep LLM analysis with lineup diff as context
+- Execute within the pre-match window before market adjusts
+
+This is where LLMs genuinely add value — interpreting the *significance* of a lineup change (e.g., "star striker rested" vs "star striker injured") is qualitative reasoning that statistical models struggle with.
+
+#### Tier 3: Closing Line Value (CLV) Tracking (Diagnostic, Not Directly Profitable)
+
+Closing line value is the industry-standard diagnostic for whether a bettor has real edge. Track whether the agent's entry price is better than the closing price (the final price when the market suspends at kickoff).
+
+If Oracle consistently beats the closing line, it has real edge — even if individual bets lose. If it does not beat the closing line, it is not profitable long-term regardless of short-term results.
+
+**Implementation:** Add a `closing_price` field to the Trade record. At settlement, fetch the final pre-kickoff price from Betfair and compute `CLV = entry_price - closing_price`. Track aggregate CLV in the dashboard.
+
+#### Tier 4: Market Microstructure Signals (Advanced)
+
+Betfair provides real-time order book depth. Price movements, volume spikes, and order-book imbalances in the minutes before an event can signal informed money entering the market. This is effectively front-running sharp bettors — not by seeing their orders, but by detecting market footprint patterns.
+
+This is significantly more complex to implement and requires high-frequency data collection. It is a Phase 6+ enhancement.
+
+### 11.3 Recommended Transition Plan
+
+| Phase | Signal Source | Purpose |
+|---|---|---|
+| Phase 4 (current) | LLM + headlines | Validate pipeline mechanics, collect trade data |
+| Phase 5A (new) | Add CLV tracking | Diagnose whether current signal has value |
+| Phase 5B (new) | Add statistical model (xG/form) | Replace LLM as primary signal; LLM becomes secondary |
+| Phase 5C (new) | Add lineup ingestion | Time-sensitive alpha during pre-match window |
+| Phase 6 | Statistical model + LLM + lineups | Live money with validated multi-source signal |
+
+### 11.4 Config Changes: Paper → Live
+
+| Parameter | Paper (Phase 4) | Live (Phase 6) | Rationale |
+|---|---|---|---|
+| `margin_min` | 0.030 | 0.025–0.030 | Wider margin compensates for real slippage |
+| `confidence_floor` | 35 | 52–55 | Only trade when genuinely confident with real money |
+| `kelly_base_fraction` | 0.50 | 0.25 | Quarter-Kelly reduces variance for live trading |
+| `max_exposure` | 0.85 | 0.50 | Don't have >50% of bankroll at risk simultaneously |
+| `drawdown_throttle_pct` | 0.20 | 0.15 | Throttle earlier with real money |
+| `_HARD_CAP` (code) | 0.10 | 0.15 | Raise slightly once signal is validated |
+| `MAX_SINGLE_BET_AUD` (code) | N/A | 20.0 | Hard-coded ceiling for first 30 days |
+| `MAX_DAILY_LOSS_AUD` (code) | N/A | 100.0 | Kill switch if daily P&L hits this |
+
+---
+
