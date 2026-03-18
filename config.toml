@@ -18,7 +18,7 @@ drawdown_throttle_pct = 0.20
 drawdown_throttle_factor = 0.50
 confidence_floor = 52
 commission_pct = 0.05
-beta = 0.50
+beta = 2.00
 liquidity_safety_factor = 0.70
 kelly_base_fraction = 0.50
 
