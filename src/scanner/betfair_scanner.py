@@ -134,7 +134,7 @@ def get_markets(
 
     catalogue = client.betting.list_market_catalogue(
         filter=market_filter(market_countries=country_codes),
-        market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION"],
+        market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION", "EVENT", "EVENT_TYPE"],
         max_results=min(limit * 3, 200),  # cap to avoid excessive batches
     )
 
@@ -171,9 +171,13 @@ def get_markets(
 
         total_matched = getattr(book, "total_matched", 0.0) or 0.0
 
+        event_name = (cat.event.name if cat.event else None) or ""
+        market_name = cat.market_name or cat.market_id
+        question = f"{event_name} {market_name}".strip() if event_name else market_name
+
         markets.append({
             "id": cat.market_id,
-            "question": cat.market_name or cat.market_id,
+            "question": question,
             "probability": prob,
             "volume": total_matched,
             "url": _market_url(cat.market_id),
@@ -214,7 +218,7 @@ def get_market_detail(market_id: str) -> dict:
 
     catalogue = client.betting.list_market_catalogue(
         filter=market_filter(market_ids=[market_id]),
-        market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION"],
+        market_projection=["MARKET_START_TIME", "RUNNER_DESCRIPTION", "EVENT", "EVENT_TYPE"],
         max_results=1,
     )
     books = client.betting.list_market_book(
@@ -236,7 +240,9 @@ def get_market_detail(market_id: str) -> dict:
     # Fall back to 0.5 for detail calls — caller uses this as settlement price
     if prob is None:
         prob = 0.5
-    name = (cat.market_name if cat else None) or market_id
+    event_name = (cat.event.name if cat and cat.event else None) or ""
+    market_name = (cat.market_name if cat else None) or market_id
+    name = f"{event_name} {market_name}".strip() if event_name else market_name
 
     return {
         "id": market_id,

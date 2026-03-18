@@ -44,6 +44,12 @@ Market question: {question}
 Current mid-price (probability): {mid_price:.3f}
 Recent news: {news_summary or "No recent news available."}
 
+Even when no news is available, reason about whether the current mid-price looks \
+fair or mispriced using your prior knowledge of the topic, known market biases \
+(e.g. longshot bias in racing: punters systematically overbid longshots and \
+underbid favourites), or any other relevant factors. Only return sentiment_delta=0 \
+if you have genuinely no view at all.
+
 Output this JSON structure exactly:
 {{
   "sentiment_delta": <float -1.0 to 1.0>,
