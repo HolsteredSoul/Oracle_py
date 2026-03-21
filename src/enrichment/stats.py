@@ -102,6 +102,29 @@ def _compute_completeness(stats: MatchStats) -> float:
 # Team ID cache: canonical name -> football-data.org team ID
 _team_id_cache: dict[str, int | None] = {}
 
+# Rate limiter: football-data.org free tier allows 10 requests per minute.
+# Track timestamps of recent requests and pause when approaching the limit.
+_fd_request_times: list[float] = []
+_FD_MAX_REQUESTS_PER_MINUTE = 10
+_FD_RATE_WINDOW = 60.0  # seconds
+
+
+def _fd_rate_limit() -> None:
+    """Block until we're under the rate limit for football-data.org."""
+    now = time.time()
+    # Purge requests older than the window
+    _fd_request_times[:] = [t for t in _fd_request_times if now - t < _FD_RATE_WINDOW]
+
+    if len(_fd_request_times) >= _FD_MAX_REQUESTS_PER_MINUTE:
+        # Wait until the oldest request falls outside the window
+        wait = _FD_RATE_WINDOW - (now - _fd_request_times[0]) + 0.5
+        if wait > 0:
+            logger.debug("football-data.org rate limiter: sleeping %.1fs", wait)
+            time.sleep(wait)
+            _fd_request_times[:] = [t for t in _fd_request_times if time.time() - t < _FD_RATE_WINDOW]
+
+    _fd_request_times.append(time.time())
+
 
 def _fd_headers() -> dict[str, str]:
     """Auth headers for football-data.org."""
@@ -113,11 +136,13 @@ def _fd_headers() -> dict[str, str]:
 
 def _fd_get(path: str, params: dict | None = None) -> dict | list | None:
     """GET request to football-data.org v4 API."""
+    _fd_rate_limit()
     url = f"{settings.stats.football_api_base}{path}"
     try:
         resp = httpx.get(url, headers=_fd_headers(), params=params, timeout=_TIMEOUT)
         if resp.status_code == 429:
-            logger.warning("football-data.org rate limit hit.")
+            logger.warning("football-data.org rate limit hit — backing off 60s.")
+            time.sleep(60)
             return None
         resp.raise_for_status()
         return resp.json()
@@ -126,32 +151,74 @@ def _fd_get(path: str, params: dict | None = None) -> dict | list | None:
         return None
 
 
+# Available free-tier competition codes on football-data.org
+_FD_COMPETITIONS = ["PL", "BL1", "SA", "PD", "FL1", "DED", "PPL", "ELC", "CL"]
+_fd_team_index_built = False
+
+
+def _fd_build_team_index() -> None:
+    """Build a name→ID index from all available competitions (called once)."""
+    global _fd_team_index_built  # noqa: PLW0603
+    if _fd_team_index_built:
+        return
+    _fd_team_index_built = True
+
+    for comp_code in _FD_COMPETITIONS:
+        data = _fd_get(f"/competitions/{comp_code}/teams")
+        if not data or not isinstance(data, dict):
+            continue
+        for team in data.get("teams", []):
+            tid = team.get("id")
+            name = team.get("name", "")
+            short = team.get("shortName", "")
+            if tid and name:
+                _team_id_cache[name.lower()] = tid
+                if short:
+                    _team_id_cache[short.lower()] = tid
+
+    logger.info("football-data.org team index built: %d entries", len(_team_id_cache))
+
+
+def _normalize_for_lookup(name: str) -> str:
+    """Normalize a team name for index lookup."""
+    n = name.lower().strip()
+    for suffix in (" fc", " afc", " sc"):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)].strip()
+    return n
+
+
 def _fd_resolve_team_id(canonical_name: str) -> int | None:
     """Resolve a canonical team name to a football-data.org team ID."""
-    if canonical_name in _team_id_cache:
-        return _team_id_cache[canonical_name]
+    _fd_build_team_index()
 
-    data = _fd_get("/teams", params={"name": canonical_name})
-    if not data or not isinstance(data, dict):
-        _team_id_cache[canonical_name] = None
-        return None
+    key = canonical_name.lower()
+    if key in _team_id_cache:
+        return _team_id_cache[key]
 
-    teams = data.get("teams", [])
-    if not teams:
-        # Try shorter search
-        short = canonical_name.replace(" FC", "").replace(" AFC", "").strip()
-        data = _fd_get("/teams", params={"name": short})
-        if not data or not isinstance(data, dict):
-            _team_id_cache[canonical_name] = None
-            return None
-        teams = data.get("teams", [])
+    # Try normalized (without FC/AFC suffix)
+    normalized = _normalize_for_lookup(canonical_name)
+    if normalized in _team_id_cache:
+        _team_id_cache[key] = _team_id_cache[normalized]
+        return _team_id_cache[normalized]
 
-    if teams:
-        team_id = teams[0].get("id")
-        _team_id_cache[canonical_name] = team_id
-        return team_id
+    # Fuzzy search against index keys
+    from difflib import SequenceMatcher
+    best_score = 0.0
+    best_id: int | None = None
+    for idx_key, tid in _team_id_cache.items():
+        score = SequenceMatcher(None, normalized, idx_key).ratio()
+        if score > best_score:
+            best_score = score
+            best_id = tid
 
-    _team_id_cache[canonical_name] = None
+    if best_score >= 0.70 and best_id is not None:
+        _team_id_cache[key] = best_id
+        logger.debug("Fuzzy-matched team %r to ID %d (score=%.2f)", canonical_name, best_id, best_score)
+        return best_id
+
+    _team_id_cache[key] = None  # type: ignore[assignment]
+    logger.debug("No football-data.org match for %r (best=%.2f)", canonical_name, best_score)
     return None
 
 
