@@ -200,8 +200,20 @@ class StateManager:
     # ------------------------------------------------------------------
 
     def current_exposure(self, state: OracleState) -> float:
-        """Sum of filled_size across all open positions (fraction of bankroll)."""
-        return sum(p.filled_size for p in state.positions.values())
+        """Sum of risk exposure across all open positions (fraction of bankroll).
+
+        For back bets the risk is the stake (== filled_size * bankroll).
+        For lay bets the risk is the liability, not the (potentially huge) stake.
+        """
+        if state.bankroll <= 0:
+            return 0.0
+        total = 0.0
+        for p in state.positions.values():
+            if p.direction == "lay":
+                total += p.liability_abs / state.bankroll
+            else:
+                total += p.filled_size
+        return total
 
     def drawdown_pct(self, state: OracleState) -> float:
         """Current drawdown fraction: (peak - bankroll) / peak.
