@@ -58,19 +58,60 @@ def load_spend() -> dict:
 # Data transformations
 # ---------------------------------------------------------------------------
 
-def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> pd.DataFrame:
-    """Reconstruct equity curve from bankroll_after in trade history.
+def _trade_entry_cost(t: dict) -> float:
+    """Return the capital deployed at entry for a trade.
 
-    Prepends the initial bankroll at created_at or the first trade timestamp.
+    For back bets, cost = stake_abs (the stake is escrowed).
+    For lay bets, cost = liability_abs if available, else derived from
+    filled_size * bankroll_before.
     """
-    rows = [{"timestamp": "start", "bankroll": initial_bankroll}]
+    if t.get("direction") == "lay":
+        # Prefer stored liability; fall back to filled_size * bankroll_before
+        liab = t.get("liability_abs")
+        if liab is not None:
+            return liab
+        return t.get("filled_size", 0) * t.get("bankroll_before", 0)
+    return t.get("stake_abs", 0)
+
+
+def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> pd.DataFrame:
+    """Reconstruct equity curve from trade history.
+
+    Equity = cash (bankroll_after) + capital deployed in open positions.
+    Each trade entry deploys capital; each settlement returns it (± P&L).
+    This tracks total equity, not just cash on hand.
+    """
+    # Build a chronological event stream of entries and settlements
+    events: list[dict] = []
     for t in trade_history:
-        rows.append({
+        cost = _trade_entry_cost(t)
+        events.append({
             "timestamp": t.get("timestamp", ""),
-            "bankroll": t.get("bankroll_after", initial_bankroll),
+            "type": "entry",
+            "cost": cost,
+            "pnl": 0,
         })
+        if t.get("status") == "settled" and t.get("exit_timestamp"):
+            events.append({
+                "timestamp": t["exit_timestamp"],
+                "type": "settle",
+                "cost": cost,
+                "pnl": t.get("pnl", 0) or 0,
+            })
+
+    rows = [{"timestamp": "start", "equity": initial_bankroll}]
+    equity = initial_bankroll
+    deployed = 0.0
+
+    for ev in sorted(events, key=lambda e: e["timestamp"]):
+        if ev["type"] == "entry":
+            deployed += ev["cost"]
+        else:  # settle — capital returns, P&L realised
+            deployed -= ev["cost"]
+            equity += ev["pnl"]
+        rows.append({"timestamp": ev["timestamp"], "equity": equity})
+
     df = pd.DataFrame(rows)
-    # Convert timestamps to datetime (errors='coerce' handles the "start" placeholder)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     return df
@@ -80,8 +121,8 @@ def compute_drawdown_series(equity_df: pd.DataFrame) -> pd.DataFrame:
     """Compute rolling max-drawdown series from equity curve."""
     if equity_df.empty:
         return pd.DataFrame(columns=["timestamp", "drawdown_pct"])
-    peak = equity_df["bankroll"].cummax()
-    drawdown = (peak - equity_df["bankroll"]) / peak.replace(0, float("nan"))
+    peak = equity_df["equity"].cummax()
+    drawdown = (peak - equity_df["equity"]) / peak.replace(0, float("nan"))
     return pd.DataFrame({"timestamp": equity_df["timestamp"], "drawdown_pct": drawdown.fillna(0.0)})
 
 
@@ -102,7 +143,7 @@ def holding_hours(entry_timestamp: str) -> float:
 # ---------------------------------------------------------------------------
 
 def render_equity_panel(equity_df: pd.DataFrame) -> None:
-    """Panel 2: Equity curve — bankroll vs time."""
+    """Panel 2: Equity curve — total equity vs time."""
     st.subheader("Equity Curve")
     if equity_df.empty or len(equity_df) < 2:
         st.info("Not enough trades to display equity curve yet.")
@@ -110,14 +151,14 @@ def render_equity_panel(equity_df: pd.DataFrame) -> None:
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=equity_df["timestamp"],
-        y=equity_df["bankroll"],
+        y=equity_df["equity"],
         mode="lines+markers",
         line=dict(color="#00CC96", width=2),
-        name="Bankroll",
+        name="Equity",
     ))
     fig.update_layout(
         xaxis_title="Time",
-        yaxis_title="Bankroll (AUD)",
+        yaxis_title="Equity (AUD)",
         margin=dict(l=0, r=0, t=20, b=0),
         height=280,
     )
@@ -363,14 +404,24 @@ def main() -> None:
     last_updated = state_raw.get("last_updated", "unknown")
     created_at = state_raw.get("created_at", "")
 
-    # Drawdown
-    drawdown = (peak - bankroll) / peak if peak > 0 else 0.0
+    # Compute equity = cash + capital deployed in open positions
+    deployed_capital = 0.0
+    for pos in positions.values():
+        if pos.get("direction") == "lay":
+            deployed_capital += pos.get("liability_abs", 0)
+        else:
+            deployed_capital += pos.get("stake_abs", 0)
+    equity = bankroll + deployed_capital
+
+    # Drawdown based on equity
+    equity_peak = max(peak, equity)
+    drawdown = (equity_peak - equity) / equity_peak if equity_peak > 0 else 0.0
 
     # --- Top metrics row ---
     st.caption(f"Last updated: {last_updated}")
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Bankroll", f"${bankroll:.2f}")
-    col2.metric("Peak", f"${peak:.2f}")
+    col1.metric("Equity", f"${equity:.2f}")
+    col2.metric("Cash", f"${bankroll:.2f}")
     col3.metric("Drawdown", f"{drawdown:.1%}")
     col4.metric("Open Positions", len(positions))
     settled_count = sum(1 for t in trade_history if t.get("status") == "settled")
