@@ -102,6 +102,7 @@ def _analyse_and_trade(
     home_team = market.get("home_team", "")
     away_team = market.get("away_team", "")
     event_type_id = market.get("event_type_id", "")
+    market_start_time = market.get("market_start_time")
 
     # --- Statistical model (Phase 5A.2) ---
     p_model: float | None = None
@@ -214,6 +215,11 @@ def _analyse_and_trade(
         logger.debug("Market %s already resolved — skipping.", market_id)
         return
 
+    # Phase 5A.1: update last_seen_price for CLV tracking on open positions
+    if market_id in state.positions:
+        current_prob = detail.get("probability", mid_price)
+        state.positions[market_id].last_seen_price = current_prob
+
     # Use real Betfair back/lay prices where available; fall back to synthetic spread.
     p_ask = detail.get("p_back") or PaperBroker.derive_spread(detail["probability"])[0]
     p_bid = detail.get("p_lay") or PaperBroker.derive_spread(detail["probability"])[1]
@@ -259,6 +265,7 @@ def _analyse_and_trade(
     # --- Execution ---
     if mode in ("paper", "betfair-paper"):
         fill_price = p_ask if direction == "back" else p_bid
+        mst_iso = market_start_time.isoformat() if market_start_time else None
         state, trade = broker.execute(
             state=state,
             market_id=market_id,
@@ -273,6 +280,7 @@ def _analyse_and_trade(
             conf_score=conf_score,
             uncertainty_penalty=uncertainty_penalty,
             available_liquidity=available_liquidity,
+            market_start_time=mst_iso,
         )
         if trade is not None:
             state.priors[market_id] = p_fair
@@ -367,6 +375,7 @@ def scan_cycle(
         if is_betfair:
             markets = betfair_scanner.get_markets(
                 country_codes=settings.scanner.betfair_country_codes,
+                hours_ahead=settings.scanner.betfair_hours_ahead,
             )
         else:
             markets = get_markets()

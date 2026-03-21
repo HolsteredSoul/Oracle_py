@@ -136,16 +136,14 @@ def _call_openrouter(
         "messages": [{"role": "user", "content": prompt}],
     }
 
-    # Structured output mode: enforce JSON Schema compliance
-    if response_schema is not None:
-        # Anthropic models on OpenRouter reject strict=True; omit it for them.
-        is_anthropic = model.startswith("anthropic/")
+    # Structured output mode: enforce JSON Schema compliance.
+    # Anthropic models on OpenRouter don't support json_schema at all — skip entirely.
+    if response_schema is not None and not model.startswith("anthropic/"):
         schema_block: dict[str, Any] = {
             "name": "oracle_response",
             "schema": response_schema,
+            "strict": True,
         }
-        if not is_anthropic:
-            schema_block["strict"] = True
         payload["response_format"] = {
             "type": "json_schema",
             "json_schema": schema_block,
@@ -173,7 +171,8 @@ def call_llm(
         tier: "fast" or "deep". Controls model selection and cost.
         response_schema: Optional JSON Schema dict. When provided and
             use_structured_output is enabled, OpenRouter enforces schema
-            compliance. Falls back to prompt-based JSON on 400 errors.
+            compliance. Skipped for Anthropic models (unsupported via
+            OpenRouter). Falls back to prompt-based JSON on 400 errors.
 
     Returns:
         Parsed dict if the LLM returns valid JSON, else None.
@@ -202,7 +201,7 @@ def call_llm(
         response = _call_openrouter(model, prompt, response_schema=schema)
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 400 and schema is not None:
-            # Model may not support structured output — retry without schema
+            # Safety net for non-Anthropic models that reject structured output
             logger.warning(
                 "Structured output rejected by %s (400) — retrying without schema.",
                 model,

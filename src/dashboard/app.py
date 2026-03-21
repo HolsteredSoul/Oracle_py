@@ -323,9 +323,17 @@ def render_position_table(positions: dict) -> None:
 
     rows = []
     for mkt_id, pos in positions.items():
+        mst = pos.get("market_start_time", "")
+        event_date = ""
+        if mst:
+            try:
+                dt = datetime.fromisoformat(mst)
+                event_date = dt.strftime("%b %d %H:%M")
+            except (ValueError, TypeError):
+                event_date = mst[:16]
         rows.append({
-            "Market ID": mkt_id[:20],
-            "Question": pos.get("question", "")[:60],
+            "Market": pos.get("question", "")[:60],
+            "Event": event_date,
             "Direction": pos.get("direction", ""),
             "Entry Price": f"{pos.get('entry_price', 0):.3f}",
             "Size": f"{pos.get('filled_size', 0):.4f}",
@@ -342,13 +350,14 @@ def render_trade_log(trade_history: list[dict]) -> None:
         st.info("No trades logged yet.")
         return
 
-    cols = ["timestamp", "market_id", "direction", "filled_size",
+    cols = ["timestamp", "question", "direction", "filled_size",
             "fill_price", "edge", "p_fair", "conf_score", "pnl", "status"]
     rows = []
     for t in reversed(trade_history[-20:]):
         rows.append({c: t.get(c, "") for c in cols})
 
     df = pd.DataFrame(rows)
+    df.rename(columns={"question": "Market"}, inplace=True)
     # Format numerics
     for col in ["filled_size", "fill_price", "edge", "p_fair", "conf_score"]:
         if col in df.columns:

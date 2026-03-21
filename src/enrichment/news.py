@@ -32,9 +32,13 @@ _NEWSDATA_URL = "https://newsdata.io/api/1/news"
 _GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 _TIMEOUT = 10.0
 _CACHE_TTL = 3600.0  # 1 hour
+_NEWSDATA_MAX_PER_MIN = 5  # conservative; free tier allows ~10/min
 
 # In-memory cache: query -> (fetched_at_unix, summary_str)
 _cache: dict[str, tuple[float, str]] = {}
+
+# Rate-limiter: timestamps of recent NewsData API calls
+_newsdata_calls: list[float] = []
 
 # Common Betfair boilerplate words to strip when building search queries.
 _STRIP_WORDS = {
@@ -131,7 +135,21 @@ def get_news_summary(query: str, max_articles: int = 5) -> str:
     return summary
 
 
+def _newsdata_rate_limit() -> None:
+    """Sleep if necessary to stay within NewsData free-tier rate limits."""
+    now = time.monotonic()
+    # Prune calls older than 60s
+    _newsdata_calls[:] = [t for t in _newsdata_calls if now - t < 60.0]
+    if len(_newsdata_calls) >= _NEWSDATA_MAX_PER_MIN:
+        wait = 60.0 - (now - _newsdata_calls[0]) + 0.1
+        if wait > 0:
+            logger.info("NewsData rate limit: sleeping %.1fs", wait)
+            time.sleep(wait)
+
+
 def _fetch_newsdata(query: str, max_articles: int) -> str:
+    _newsdata_rate_limit()
+
     params = {
         "apikey": settings.newsdata_api_key,
         "q": query,
@@ -143,6 +161,8 @@ def _fetch_newsdata(query: str, max_articles: int) -> str:
         response = client.get(_NEWSDATA_URL, params=params)
         response.raise_for_status()
         data = response.json()
+
+    _newsdata_calls.append(time.monotonic())
 
     results = data.get("results") or []
     if not results:

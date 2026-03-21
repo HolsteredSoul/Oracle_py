@@ -18,6 +18,7 @@ Public API:
 from __future__ import annotations
 
 import logging
+import random
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +86,7 @@ class Position(BaseModel):
     entry_timestamp: str                             # ISO-8601 UTC
     trade_id: str                                    # FK to Trade record
     p_fair_at_entry: float
+    market_start_time: Optional[str] = None          # ISO-8601 UTC event start
     # Phase 5A.1 — updated each scan cycle; becomes closing_price at settlement
     last_seen_price: Optional[float] = None
 
@@ -140,31 +142,35 @@ class StateManager:
         """Atomically persist state with retry for OneDrive file locking.
 
         Writes to <path>.tmp then replaces the main file via Path.replace().
-        Retries up to 5 times with increasing delays to handle OneDrive locks.
+        Retries up to 10 times with exponential backoff + jitter to handle
+        OneDrive locks. Non-fatal on final failure — in-memory state is still
+        correct and will be persisted on the next cycle.
         """
         state.last_updated = _utc_now()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._path.with_suffix(".tmp")
 
-        for attempt in range(5):
+        max_attempts = 10
+        for attempt in range(max_attempts):
             try:
                 tmp.write_text(state.model_dump_json(indent=2), encoding="utf-8")
                 tmp.replace(self._path)
                 return
             except PermissionError:
-                if attempt < 4:
-                    delay = 0.5 * (attempt + 1)
+                if attempt < max_attempts - 1:
+                    delay = min(0.5 * 2 ** attempt, 10.0) + random.uniform(0, 0.5)
                     logger.warning(
-                        "State save attempt %d/5 failed (file locked) — retrying in %.1fs",
+                        "State save attempt %d/%d failed (file locked) — retrying in %.1fs",
                         attempt + 1,
+                        max_attempts,
                         delay,
                     )
                     time.sleep(delay)
                 else:
                     logger.error(
-                        "State save failed after 5 attempts — state may be stale on disk."
+                        "State save failed after %d attempts — state may be stale on disk.",
+                        max_attempts,
                     )
-                    raise
 
     def add_trade(self, state: OracleState, trade: Trade) -> OracleState:
         """Append a Trade to history and save. Returns the mutated state."""

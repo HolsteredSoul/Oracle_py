@@ -115,6 +115,7 @@ class PaperBroker:
         conf_score: float,
         uncertainty_penalty: float,
         available_liquidity: float,
+        market_start_time: str | None = None,
     ) -> tuple[OracleState, Trade | None]:
         """Simulate a Fill-or-Kill paper order.
 
@@ -234,6 +235,7 @@ class PaperBroker:
             entry_timestamp=trade.timestamp,
             trade_id=trade.trade_id,
             p_fair_at_entry=p_fair,
+            market_start_time=market_start_time,
         )
 
         state.bankroll = bankroll_after
