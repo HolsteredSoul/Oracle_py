@@ -1,6 +1,6 @@
 [llm]
 # Update model IDs here as new models are released — never hardcode in source
-fast_model = "google/gemini-2.0-flash-001"
+fast_model = "google/gemini-2.5-flash-lite"
 deep_model = "anthropic/claude-sonnet-4.6"
 daily_cap_usd = 5.0
 downgrade_threshold_pct = 0.80

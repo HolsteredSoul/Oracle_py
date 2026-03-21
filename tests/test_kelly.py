@@ -71,23 +71,24 @@ def test_lay_negative_edge_returns_negative():
 
 def test_hard_cap_enforced():
     cfg = make_config(kelly_base_fraction=1.0)
-    # f_star=10 would give 10*1.0*1.0*1.0 = 10 without cap
+    # f_star=10 would give 10*1.0*1.0*1.0 = 10 without cap → clamped to 0.10
     result = apply_oracle_sizing(10.0, conf_score=100, drawdown_pct=0.0, config=cfg)
-    assert result == pytest.approx(0.25)
+    assert result == pytest.approx(0.10)
 
 
 def test_drawdown_above_threshold_halves_output():
     cfg = make_config()
-    no_dd = apply_oracle_sizing(0.4, conf_score=100, drawdown_pct=0.0, config=cfg)
-    with_dd = apply_oracle_sizing(0.4, conf_score=100, drawdown_pct=0.25, config=cfg)
+    # Use small f_star so results stay below the 0.10 hard cap
+    no_dd = apply_oracle_sizing(0.05, conf_score=100, drawdown_pct=0.0, config=cfg)
+    with_dd = apply_oracle_sizing(0.05, conf_score=100, drawdown_pct=0.25, config=cfg)
     assert with_dd == pytest.approx(no_dd * 0.50, rel=1e-6)
 
 
 def test_conf_score_50_gives_half_lambda_conf():
-    # Use f_star=0.2 so neither result hits the 0.25 hard cap
+    # Use small f_star so neither result hits the 0.10 hard cap
     cfg = make_config(kelly_base_fraction=1.0)
-    result_50 = apply_oracle_sizing(0.2, conf_score=50, drawdown_pct=0.0, config=cfg)
-    result_100 = apply_oracle_sizing(0.2, conf_score=100, drawdown_pct=0.0, config=cfg)
+    result_50 = apply_oracle_sizing(0.05, conf_score=50, drawdown_pct=0.0, config=cfg)
+    result_100 = apply_oracle_sizing(0.05, conf_score=100, drawdown_pct=0.0, config=cfg)
     # λ_conf at 50 = 0.5, at 100 = 1.0 → ratio should be 0.5
     assert result_50 == pytest.approx(result_100 * 0.5, rel=1e-6)
 
