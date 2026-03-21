@@ -173,7 +173,7 @@ def get_markets(
     country_codes: list[str] | None = None,
     hours_ahead: int = 72,
 ) -> list[dict]:
-    """Fetch and filter live Australian Betfair exchange markets.
+    """Fetch and filter live Betfair exchange markets.
 
     Prioritises near-term MATCH_ODDS and OVER_UNDER markets over long-term
     outright winner futures. Markets are sorted by market type priority then

@@ -365,7 +365,9 @@ def scan_cycle(
         drawdown = state_manager.drawdown_pct(state)
 
         if is_betfair:
-            markets = betfair_scanner.get_markets()
+            markets = betfair_scanner.get_markets(
+                country_codes=settings.scanner.betfair_country_codes,
+            )
         else:
             markets = get_markets()
         logger.info("Scan cycle started (%s), found %d markets", mode, len(markets))

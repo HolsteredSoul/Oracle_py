@@ -28,6 +28,7 @@ poll_interval_sec = 1800
 manifold_min_volume = 500
 manifold_min_prob_range = [0.05, 0.95]
 betfair_event_types = [1, 2, 4, 61, 7522, 7524, 7511]
+betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT"]
 
 [stats]
 football_api = "football-data"

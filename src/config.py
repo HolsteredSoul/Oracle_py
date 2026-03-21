@@ -59,6 +59,7 @@ class ScannerConfig(BaseModel):
     manifold_min_volume: int = Field(ge=0)
     manifold_min_prob_range: Tuple[float, float]
     betfair_event_types: list[int] = Field(default_factory=list)
+    betfair_country_codes: list[str] = Field(default_factory=lambda: ["AU"])
 
     @field_validator("manifold_min_prob_range")
     @classmethod
