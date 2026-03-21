@@ -327,6 +327,11 @@ def _settle_betfair_positions(
         if current_prob is not None and not detail.get("isResolved"):
             state.positions[market_id].last_seen_price = current_prob
 
+        # Backfill market_start_time for positions opened before this field existed
+        mst = detail.get("market_start_time")
+        if mst and not state.positions[market_id].market_start_time:
+            state.positions[market_id].market_start_time = mst.isoformat()
+
         if detail.get("isResolved"):
             resolution = detail.get("resolution", "MKT")
             res_prob = detail.get("probability", 0.5)

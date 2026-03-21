@@ -447,6 +447,8 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
     p_back = round(1.0 / best_back_price, 6) if best_back_price else None
     p_lay = round(1.0 / best_lay_price, 6) if best_lay_price else None
 
+    start_dt = _ensure_utc(getattr(cat, "market_start_time", None)) if cat else None
+
     return {
         "id": market_id,
         "question": name,
@@ -464,4 +466,5 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         # Betfair markets don't resolve YES/NO — always use MKT settlement.
         # PaperBroker.settle_position() handles MKT via resolution_probability.
         "resolution": "MKT",
+        "market_start_time": start_dt,
     }
