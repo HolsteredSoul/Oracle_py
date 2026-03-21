@@ -156,6 +156,22 @@ class PaperBroker:
             denom = (1.0 / fill_price) - 1.0
             stake_abs = liability_abs / denom if denom > 0 else 0.0
 
+            # Lay stake cap: prevent stake_abs from exceeding max_pnl_pct of
+            # bankroll. Without this, laying at extreme odds (e.g. 0.99) produces
+            # stake_abs ~100× liability, so one trade can move bankroll by 500%+.
+            _MAX_PNL_PCT = 0.15  # max 15% of bankroll impact per lay trade
+            max_stake = state.bankroll * _MAX_PNL_PCT
+            if stake_abs > max_stake:
+                scale_lay = max_stake / stake_abs
+                logger.info(
+                    "Lay stake cap: capping stake_abs from %.2f to %.2f "
+                    "(%.0f%% of bankroll)",
+                    stake_abs, max_stake, _MAX_PNL_PCT * 100,
+                )
+                stake_abs *= scale_lay
+                liability_abs *= scale_lay
+                filled_size *= scale_lay
+
         # Hard dollar cap per trade — second line of defence against Kelly oversizing
         _MAX_PAPER_COST = 100.0
         cost = stake_abs if direction == "back" else liability_abs

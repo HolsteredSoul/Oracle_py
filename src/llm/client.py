@@ -138,13 +138,17 @@ def _call_openrouter(
 
     # Structured output mode: enforce JSON Schema compliance
     if response_schema is not None:
+        # Anthropic models on OpenRouter reject strict=True; omit it for them.
+        is_anthropic = model.startswith("anthropic/")
+        schema_block: dict[str, Any] = {
+            "name": "oracle_response",
+            "schema": response_schema,
+        }
+        if not is_anthropic:
+            schema_block["strict"] = True
         payload["response_format"] = {
             "type": "json_schema",
-            "json_schema": {
-                "name": "oracle_response",
-                "strict": True,
-                "schema": response_schema,
-            },
+            "json_schema": schema_block,
         }
 
     with httpx.Client(timeout=_TIMEOUT) as client:
