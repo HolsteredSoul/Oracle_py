@@ -224,6 +224,7 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | 2 | Intelligence — LLM integration, enrichment | Complete |
 | 3 | Strategy & Risk — Kelly, Bayesian, edge, risk gates | Complete |
 | 4 | Paper Trading — state persistence, execution, dashboard | Complete |
+| 5A | Intelligence Upgrade — statistical model, LLM reframing | In progress |
 | 5 | Backtesting & Tuning — historical replay, parameter sweep | Not started |
 | 6 | Live Betfair — OMS, market mapping, safeguards | Not started |
 
@@ -243,6 +244,9 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | `src/strategy/bayesian.py` | Logit-space probability updater |
 | `src/execution/paper.py` | Paper broker simulation |
 | `src/dashboard/app.py` | Streamlit monitoring UI |
+| `src/enrichment/stats.py` | Statistical data fetcher (football-data.org, Squiggle) |
+| `src/enrichment/team_mapping.py` | Betfair → stats API team name resolution |
+| `src/strategy/statistical_model.py` | Poisson match outcome prediction model |
 
 ---
 

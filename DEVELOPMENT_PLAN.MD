@@ -436,7 +436,7 @@ During Phase 4 paper trading, the following was observed:
 
 ### Tasks
 
-**5A.1 — Closing Line Value (CLV) Tracking**
+**5A.1 — Closing Line Value (CLV) Tracking** ✅ *Implemented 2026-03-21 (commit 82bd5db)*
 
 Add a diagnostic metric to every trade that measures whether Oracle's entry price was better than the final pre-kickoff price (closing line). This is the industry standard for measuring betting edge.
 
@@ -460,39 +460,69 @@ clv: Optional[float] = None             # entry_price - closing_price (positive 
 
 **5A.2 — Statistical Data Integration**
 
-Replace LLM-headlines as the primary signal with actual sports statistics.
+Replace LLM-headlines as the primary signal with actual sports statistics. Use lightweight, no-ML models that run deterministically without training data.
 
-**Data sources (pick one to start):**
-- `football-data.org` — free, covers A-League, EPL, Bundesliga
-- `Sportmonks` — paid, comprehensive coverage including xG, lineups, H2H
-- `FBref` / `Understat` — free xG data, scrapable
-- `AFL Tables` / `Footywire` — free AFL stats
+**Data sources:**
+- `football-data.org` — free, covers major football leagues (EPL, Bundesliga, Serie A, La Liga, etc.). Provides goals scored/conceded per team per season. No API key required for CSV data.
+- `Squiggle API` — free, covers AFL. Provides match results, tips, and team ratings. No API key required.
 
 **New module:** `src/enrichment/stats.py`
 ```python
-def get_match_stats(home_team: str, away_team: str) -> MatchStats:
-    """Fetch xG, form (last 5/10), H2H record, home/away splits."""
+def get_football_stats(home_team: str, away_team: str, league: str) -> FootballStats:
+    """Fetch goals scored/conceded averages from football-data.org CSV files."""
     ...
 
-class MatchStats(BaseModel):
-    home_xg_avg_5: float        # avg xG over last 5 home matches
-    away_xg_avg_5: float        # avg xG over last 5 away matches
-    home_form_pts_5: float      # points per game last 5
-    away_form_pts_5: float
-    h2h_home_win_pct: float     # head-to-head home win rate
-    home_goals_scored_avg: float
-    away_goals_conceded_avg: float
+def get_afl_stats(home_team: str, away_team: str) -> AFLStats:
+    """Fetch recent form and margin data from Squiggle API."""
+    ...
+
+class FootballStats(BaseModel):
+    home_goals_scored_avg: float   # avg goals scored at home
+    home_goals_conceded_avg: float # avg goals conceded at home
+    away_goals_scored_avg: float   # avg goals scored away
+    away_goals_conceded_avg: float # avg goals conceded away
+    league_avg_goals: float        # league average goals per game
+    ...
+
+class AFLStats(BaseModel):
+    home_elo: float                # Squiggle ELO rating
+    away_elo: float
+    home_recent_margin_avg: float  # avg margin last 5 games
+    away_recent_margin_avg: float
+    ...
+```
+
+**New module:** `src/enrichment/team_mapping.py`
+```python
+def betfair_to_stats_name(betfair_name: str, sport: str) -> str:
+    """Map Betfair runner names to football-data.org / Squiggle team names.
+    Uses fuzzy matching with a manual override dict for known mismatches."""
     ...
 ```
 
 **New module:** `src/strategy/statistical_model.py`
 ```python
-def predict_match_odds(stats: MatchStats) -> dict[str, float]:
-    """Return {"home": p, "draw": p, "away": p} from statistical model."""
-    # Start simple: logistic regression on xG + form
-    # Upgrade later: XGBoost or neural net
+def predict_football_odds(stats: FootballStats) -> dict[str, float]:
+    """Return {"home": p, "draw": p, "away": p} using Independent Poisson model.
+    No ML training required — uses attack/defence strength ratios to derive
+    lambda_home and lambda_away, then sums Poisson PMF grid for match outcomes."""
+    ...
+
+def predict_afl_odds(stats: AFLStats) -> dict[str, float]:
+    """Return {"home": p, "away": p} using logistic regression on ELO difference.
+    Coefficients derived analytically from historical ELO-vs-outcome data."""
     ...
 ```
+
+**LLM change:** Switched `fast_model` from `x-ai/grok-4.1-fast` to `google/gemini-2.0-flash` via OpenRouter. Reasons:
+- ~50% cheaper per token than Grok-fast
+- Native structured output support via `response_format: { type: "json_schema", json_schema: ... }` — eliminates JSON parse failures
+- Equivalent quality for the qualitative overlay role (LLM is no longer the primary signal)
+
+**Prompt reframing:** The LLM's role is now explicitly a *qualitative overlay on a statistical prior*, not the primary signal source. Prompts are updated to:
+- Receive the statistical model's `p_model` and the reasoning behind it
+- Focus on factors statistics cannot capture: injuries, weather, travel, morale, managerial changes
+- Return `sentiment_delta` as an adjustment to the statistical prior, not an independent probability estimate
 
 **Integration with existing pipeline:**
 - The statistical model produces `p_model` (replaces `p_mid` as the Bayesian prior)
@@ -500,7 +530,7 @@ def predict_match_odds(stats: MatchStats) -> dict[str, float]:
 - The Bayesian updater applies the LLM's `sentiment_delta` on top of `p_model` instead of `p_mid`
 - This means: `p_fair = expit(logit(p_model) + beta * sentiment_delta)`
 
-**Why this is better:** A statistical model trained on xG data produces calibrated probabilities. The LLM adds qualitative overlays (injuries, morale, travel fatigue) that statistics miss. Neither alone is sufficient; together they cover both quantitative and qualitative edges.
+**Why this is better:** An Independent Poisson model produces calibrated match probabilities from goal averages alone — no training data or ML pipeline required. The LLM adds qualitative overlays (injuries, morale, travel fatigue) that statistics miss. Neither alone is sufficient; together they cover both quantitative and qualitative edges.
 
 ---
 

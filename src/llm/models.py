@@ -35,3 +35,17 @@ class ExitResponse(BaseModel):
     trailing_stop_pct: float = Field(ge=0.0, le=1.0)
     target_price: float = Field(gt=0.0)
     rationale: str
+
+
+# ---------------------------------------------------------------------------
+# JSON Schema generators for OpenRouter structured output mode
+# ---------------------------------------------------------------------------
+
+def light_scan_schema() -> dict:
+    """JSON Schema for LightScanResponse (OpenRouter response_format)."""
+    return LightScanResponse.model_json_schema()
+
+
+def deep_trigger_schema() -> dict:
+    """JSON Schema for DeepTriggerResponse (OpenRouter response_format)."""
+    return DeepTriggerResponse.model_json_schema()

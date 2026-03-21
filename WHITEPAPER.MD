@@ -383,6 +383,8 @@ oracle-py/
 │   ├── enrichment/
 │   │   ├── __init__.py
 │   │   ├── news.py             # NewsData.io API client
+│   │   ├── stats.py            # Statistical data fetcher (football-data.org, Squiggle)
+│   │   ├── team_mapping.py     # Betfair ↔ stats API name resolution (fuzzy match)
 │   │   └── x_sentiment.py      # X API v2 client + keyword aggregation
 │   │
 │   ├── llm/
@@ -394,7 +396,8 @@ oracle-py/
 │   │   ├── __init__.py
 │   │   ├── bayesian.py         # logit-space updater + β calibration
 │   │   ├── kelly.py            # Commission-aware Kelly + liability translation
-│   │   └── edge.py             # Executable edge calculation (ask/bid/commission)
+│   │   ├── edge.py             # Executable edge calculation (ask/bid/commission)
+│   │   └── statistical_model.py # Independent Poisson match outcome model
 │   │
 │   ├── scanner/
 │   │   ├── __init__.py
@@ -468,6 +471,8 @@ pytest-asyncio>=0.23
 > **X API v2:** Use `httpx` with OAuth 2.0 Bearer token. Free tier limits apply.
 > **NewsData.io:** REST API via `httpx`. Free tier: 200 credits/day.
 > **Manifold:** Public REST API, no auth required for read-only access.
+> **football-data.org:** REST API via `httpx` with `X-Auth-Token` header. Free tier: 10 requests/minute, covers major European leagues (EPL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Championship).
+> **Squiggle API:** Public REST API via `httpx`, no auth required. Provides AFL match predictions, team ratings, and historical results.
 > **Betfair:** `betfairlightweight` library (Phase 4 only).
 
 
@@ -499,10 +504,22 @@ Replace or supplement LLM-headline analysis with actual sports data. APIs such a
 
 A simple logistic regression or gradient-boosted model trained on xG and form data would produce better-calibrated probability estimates than an LLM reading headlines. The LLM can still add value for qualitative factors (manager sacked, dressing room turmoil, travel fatigue) but should not be the primary signal source.
 
+**Current implementation (Phase 5A — in progress):**
+
+The statistical layer uses an **independent Poisson model** for match outcome probabilities. Each team's expected goals are estimated from recent scoring/conceding rates fetched from two data sources:
+
+- **football-data.org** — European football leagues: historical match results, goals scored/conceded per team, used to compute attack/defence strength parameters.
+- **Squiggle API** — AFL: predicted margins, win probabilities, and team ratings for Australian football.
+
+`team_mapping.py` provides a fuzzy-matched lookup table mapping Betfair runner names to the canonical team identifiers used by each stats API. This handles discrepancies like "Brisbane Lions" (Betfair) → "Brisbane" (Squiggle) or "Wolverhampton" (Betfair) → "Wolves" (football-data.org).
+
+The Poisson model computes `P(home scores X) × P(away scores Y)` across a goal matrix, then aggregates into home-win / draw / away-win probabilities. These become the statistical prior `p_model`, replacing the raw market mid-price as the Bayesian prior. The LLM delta from Gemini 2.0 Flash is applied as a secondary adjustment on top.
+
 **Implementation path:**
 ```
-src/enrichment/stats.py          — fetch xG, form, H2H from a sports data API
-src/strategy/statistical_model.py — logistic/XGBoost model producing p_fair
+src/enrichment/stats.py          — fetch scoring rates from football-data.org + Squiggle
+src/enrichment/team_mapping.py   — Betfair ↔ stats API name resolution (fuzzy match)
+src/strategy/statistical_model.py — independent Poisson model producing p_fair
 src/llm/prompts.py               — LLM receives statistical model output + news
                                     as inputs; provides adjustment delta on top
 ```
@@ -540,8 +557,8 @@ This is significantly more complex to implement and requires high-frequency data
 | Phase | Signal Source | Purpose |
 |---|---|---|
 | Phase 4 (current) | LLM + headlines | Validate pipeline mechanics, collect trade data |
-| Phase 5A (new) | Add CLV tracking | Diagnose whether current signal has value |
-| Phase 5B (new) | Add statistical model (xG/form) | Replace LLM as primary signal; LLM becomes secondary |
+| Phase 5A (in progress) | CLV tracking + statistical model (football-data.org, Squiggle) + Poisson model + Gemini 2.0 Flash | Diagnose CLV, replace LLM as primary signal with independent Poisson model; LLM becomes secondary calibrator |
+| Phase 5B (new) | Refine statistical model (xG/form, broader leagues) | Expand coverage, tune model parameters against CLV data |
 | Phase 5C (new) | Add lineup ingestion | Time-sensitive alpha during pre-match window |
 | Phase 6 | Statistical model + LLM + lineups | Live money with validated multi-source signal |
 

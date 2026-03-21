@@ -23,12 +23,13 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from src.config import settings
 from src.enrichment.news import get_news_summary, rewrite_query
+from src.enrichment.stats import get_match_stats
 from src.enrichment.trigger import should_trigger_deep
 from src.enrichment.x_sentiment import get_x_summary
 from src.execution.paper import PaperBroker
 from src.llm.client import call_llm
-from src.llm.models import DeepTriggerResponse, LightScanResponse
-from src.llm.prompts import build_deep_trigger_prompt, build_light_scan_prompt
+from src.llm.models import DeepTriggerResponse, LightScanResponse, light_scan_schema, deep_trigger_schema
+from src.llm.prompts import build_deep_trigger_prompt, build_light_scan_prompt, format_stats_context
 from src.logging_setup import configure_logging
 from src.risk.manager import check_risk_gates
 from src.scanner import betfair_scanner
@@ -37,6 +38,7 @@ from src.storage.state_manager import OracleState, StateManager
 from src.strategy.bayesian import update_probability
 from src.strategy.edge import executable_edge
 from src.strategy.kelly import apply_oracle_sizing, commission_aware_kelly
+from src.strategy.statistical_model import predict_match_odds, select_runner_prob
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -44,6 +46,10 @@ logger = logging.getLogger(__name__)
 # Maximum markets to run through the intelligence layer per cycle.
 # Keeps LLM costs predictable during development.
 _MAX_MARKETS_PER_CYCLE = 15
+
+# Betfair event type IDs for sport detection
+_EVENT_TYPE_SOCCER = "1"
+_EVENT_TYPE_AFL = "61"
 
 # Halts all new trade execution when this file exists.
 _KILL_SWITCH_PATH = Path("state/kill_switch.txt")
@@ -93,6 +99,30 @@ def _analyse_and_trade(
     mid_price = market["probability"]
     runner_name = market.get("runner_name", "")
     market_type = market.get("market_type", "")
+    home_team = market.get("home_team", "")
+    away_team = market.get("away_team", "")
+    event_type_id = market.get("event_type_id", "")
+
+    # --- Statistical model (Phase 5A.2) ---
+    p_model: float | None = None
+    stats_context = ""
+    match_stats = None
+
+    if home_team and away_team:
+        sport = "afl" if event_type_id == _EVENT_TYPE_AFL else "football"
+        match_stats = get_match_stats(home_team, away_team, sport)
+        if match_stats is not None:
+            model_probs = predict_match_odds(match_stats)
+            if model_probs is not None:
+                p_model = select_runner_prob(
+                    model_probs, runner_name, market_type, home_team, away_team,
+                )
+                if p_model is not None:
+                    logger.info(
+                        "Statistical model: p_model=%.3f for %s (market=%s)",
+                        p_model, runner_name, market_id,
+                    )
+            stats_context = format_stats_context(match_stats)
 
     # --- Enrichment ---
     search_query = rewrite_query(question, runner_name=runner_name, market_type=market_type)
@@ -101,9 +131,11 @@ def _analyse_and_trade(
 
     # --- Light scan ---
     light_prompt = build_light_scan_prompt(
-        question, mid_price, news, runner_name=runner_name, market_type=market_type
+        question, mid_price, news,
+        runner_name=runner_name, market_type=market_type,
+        stats_context=stats_context, model_probability=p_model,
     )
-    raw = call_llm(light_prompt, tier="fast")
+    raw = call_llm(light_prompt, tier="fast", response_schema=light_scan_schema())
 
     if raw is None:
         logger.debug("Light scan returned None for market %s", market_id)
@@ -130,8 +162,9 @@ def _analyse_and_trade(
         deep_prompt = build_deep_trigger_prompt(
             question, mid_price, news, x_data,
             runner_name=runner_name, market_type=market_type,
+            stats_context=stats_context, model_probability=p_model,
         )
-        deep_raw = call_llm(deep_prompt, tier="deep")
+        deep_raw = call_llm(deep_prompt, tier="deep", response_schema=deep_trigger_schema())
 
         if deep_raw is not None:
             try:
@@ -154,7 +187,10 @@ def _analyse_and_trade(
     uncertainty_penalty = response.uncertainty_penalty
 
     # --- Bayesian update (chain from prior if available) ---
-    prior_p = state.priors.get(market_id, mid_price)
+    # Use statistical model probability as default prior when available;
+    # otherwise fall back to market mid-price.
+    default_prior = p_model if p_model is not None else mid_price
+    prior_p = state.priors.get(market_id, default_prior)
     p_fair = update_probability(prior_p, sentiment_delta, settings.risk.beta)
 
     # Sanity gate: extreme divergence from mid_price likely means sign confusion.

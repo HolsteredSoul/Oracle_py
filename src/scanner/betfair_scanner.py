@@ -39,6 +39,7 @@ import betfairlightweight
 from betfairlightweight.filters import market_filter, price_projection
 
 from src.config import settings
+from src.enrichment.team_mapping import parse_teams_from_event
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,15 @@ def get_markets(
         event_name = (getattr(_event, "name", None) if _event else None) or ""
         market_name = getattr(cat, "market_name", None) or cat.market_id
 
+        # Event type ID for sport detection (1=Soccer, 61=AFL, 2=Tennis, etc.)
+        _event_type = getattr(cat, "event_type", None)
+        event_type_id = (getattr(_event_type, "id", None) if _event_type else None) or ""
+
+        # Parse home/away teams from event name (e.g. "Sydney FC v Melbourne Victory")
+        teams = parse_teams_from_event(event_name)
+        home_team = teams[0] if teams else ""
+        away_team = teams[1] if teams else ""
+
         # Market type from MARKET_DESCRIPTION projection
         market_type = ""
         _desc = getattr(cat, "description", None)
@@ -316,6 +326,9 @@ def get_markets(
             "totalLiquidity": total_liquidity,
             "isResolved": False,
             "market_start_time": start_dt,
+            "home_team": home_team,
+            "away_team": away_team,
+            "event_type_id": str(event_type_id),
         })
 
     # Sort: MATCH_ODDS first, then by start time ascending (None last)

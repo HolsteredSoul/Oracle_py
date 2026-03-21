@@ -26,6 +26,7 @@ class LLMConfig(BaseModel):
     deep_model: str
     daily_cap_usd: float = Field(gt=0)
     downgrade_threshold_pct: float = Field(gt=0, le=1.0)
+    use_structured_output: bool = False
 
 
 class TriggersConfig(BaseModel):
@@ -70,6 +71,16 @@ class ScannerConfig(BaseModel):
         return v
 
 
+class StatsConfig(BaseModel):
+    """Statistical data source configuration."""
+
+    football_api: str = "football-data"
+    football_api_base: str = "https://api.football-data.org/v4"
+    afl_api_base: str = "https://api.squiggle.com.au"
+    cache_ttl_hours: int = Field(default=6, gt=0)
+    min_data_completeness: float = Field(default=0.5, ge=0, le=1.0)
+
+
 class BetfairConfig(BaseModel):
     """Betfair exchange settings (Phase 6 only)."""
 
@@ -91,6 +102,7 @@ class Settings(BaseSettings):
     triggers: TriggersConfig
     risk: RiskConfig
     scanner: ScannerConfig
+    stats: StatsConfig = StatsConfig()
     betfair: BetfairConfig
 
     # Secrets loaded from environment variables
@@ -98,6 +110,7 @@ class Settings(BaseSettings):
     newsdata_api_key: str = ""
     x_bearer_token: str = ""
     manifold_api_key: str = ""
+    football_data_api_key: str = ""
     betfair_username: str = ""
     betfair_password: str = ""
     betfair_app_key: str = ""

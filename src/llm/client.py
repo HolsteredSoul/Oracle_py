@@ -120,17 +120,33 @@ def _is_retryable(exc: BaseException) -> bool:
     stop=stop_after_attempt(3),
     reraise=True,
 )
-def _call_openrouter(model: str, prompt: str) -> httpx.Response:
+def _call_openrouter(
+    model: str,
+    prompt: str,
+    response_schema: dict | None = None,
+) -> httpx.Response:
     """Make a single HTTP call to OpenRouter. Retried by tenacity."""
     headers = {
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://github.com/HolsteredSoul/Oracle_py",
     }
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
     }
+
+    # Structured output mode: enforce JSON Schema compliance
+    if response_schema is not None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "oracle_response",
+                "strict": True,
+                "schema": response_schema,
+            },
+        }
+
     with httpx.Client(timeout=_TIMEOUT) as client:
         response = client.post(_OPENROUTER_URL, json=payload, headers=headers)
         response.raise_for_status()
@@ -141,12 +157,19 @@ def _call_openrouter(model: str, prompt: str) -> httpx.Response:
 # Public API
 # ---------------------------------------------------------------------------
 
-def call_llm(prompt: str, tier: str = "fast") -> dict | None:
+def call_llm(
+    prompt: str,
+    tier: str = "fast",
+    response_schema: dict | None = None,
+) -> dict | None:
     """Call OpenRouter and return parsed JSON dict.
 
     Args:
         prompt: Full prompt string (system instruction embedded).
         tier: "fast" or "deep". Controls model selection and cost.
+        response_schema: Optional JSON Schema dict. When provided and
+            use_structured_output is enabled, OpenRouter enforces schema
+            compliance. Falls back to prompt-based JSON on 400 errors.
 
     Returns:
         Parsed dict if the LLM returns valid JSON, else None.
@@ -162,13 +185,32 @@ def call_llm(prompt: str, tier: str = "fast") -> dict | None:
         return None
 
     model = _choose_model(tier)
-    logger.debug("LLM call | tier=%s model=%s spend_today=$%.4f", tier, model, spend)
+
+    # Only use structured output when enabled in config
+    schema = response_schema if settings.llm.use_structured_output else None
+
+    logger.debug(
+        "LLM call | tier=%s model=%s spend_today=$%.4f structured=%s",
+        tier, model, spend, schema is not None,
+    )
 
     try:
-        response = _call_openrouter(model, prompt)
+        response = _call_openrouter(model, prompt, response_schema=schema)
     except httpx.HTTPStatusError as exc:
-        logger.error("LLM HTTP error %d after retries: %s", exc.response.status_code, exc)
-        return None
+        if exc.response.status_code == 400 and schema is not None:
+            # Model may not support structured output — retry without schema
+            logger.warning(
+                "Structured output rejected by %s (400) — retrying without schema.",
+                model,
+            )
+            try:
+                response = _call_openrouter(model, prompt, response_schema=None)
+            except (httpx.HTTPStatusError, httpx.RequestError) as retry_exc:
+                logger.error("LLM retry without schema also failed: %s", retry_exc)
+                return None
+        else:
+            logger.error("LLM HTTP error %d after retries: %s", exc.response.status_code, exc)
+            return None
     except httpx.RequestError as exc:
         logger.error("LLM network error after retries: %s", exc)
         return None

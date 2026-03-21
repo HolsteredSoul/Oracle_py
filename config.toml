@@ -1,9 +1,10 @@
 [llm]
 # Update model IDs here as new models are released — never hardcode in source
-fast_model = "x-ai/grok-4.1-fast"
+fast_model = "google/gemini-2.0-flash"
 deep_model = "anthropic/claude-sonnet-4.6"
 daily_cap_usd = 5.0
 downgrade_threshold_pct = 0.80
+use_structured_output = true
 
 [triggers]
 news_sentiment_delta = 0.28
@@ -27,6 +28,13 @@ poll_interval_sec = 1800
 manifold_min_volume = 500
 manifold_min_prob_range = [0.05, 0.95]
 betfair_event_types = [1, 2, 4, 61, 7522, 7524, 7511]
+
+[stats]
+football_api = "football-data"
+football_api_base = "https://api.football-data.org/v4"
+afl_api_base = "https://api.squiggle.com.au"
+cache_ttl_hours = 6
+min_data_completeness = 0.5
 
 [betfair]
 # Phase 4 only — leave empty during paper trading
