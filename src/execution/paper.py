@@ -20,9 +20,13 @@ Fill-or-Kill logic:
 P&L formulae (canonical — dashboard must match these exactly):
     back + YES:  pnl = stake_abs * (1/entry_price - 1) * (1 - commission_pct)
     back + NO:   pnl = -stake_abs
-    lay  + NO:   pnl = liability_abs * (1 - commission_pct)
+    lay  + NO:   pnl = stake_abs * (1 - commission_pct)
     lay  + YES:  pnl = -liability_abs
-    MKT:         use resolution_probability as settlement price in back formula
+    MKT:         interpolate between YES/NO outcomes at resolution_probability
+
+Escrow accounting:
+    Entry:      bankroll -= cost  (stake for back, liability for lay)
+    Settlement: bankroll += cost + pnl  (return escrow, apply P&L)
 """
 
 from __future__ import annotations
@@ -271,9 +275,11 @@ class PaperBroker:
             back + YES: gross = stake_abs * (1/entry_price - 1)
                         pnl   = gross * (1 - commission_pct)
             back + NO:  pnl = -stake_abs
-            lay  + NO:  pnl = liability_abs * (1 - commission_pct)
+            lay  + NO:  pnl = stake_abs * (1 - commission_pct)
             lay  + YES: pnl = -liability_abs
-            MKT:        use resolution_probability as settlement price
+            MKT:        interpolate between YES/NO at resolution_probability
+
+        Escrow: bankroll += cost + pnl (returns escrowed capital + applies P&L).
 
         Args:
             state:                  Current OracleState.
@@ -300,7 +306,7 @@ class PaperBroker:
             # Treat as partial YES win at resolution_probability
             eff_price = resolution_probability
             gross = stake_abs * (eff_price / entry_price - 1.0) if direction == "back" else (
-                liability_abs * (1.0 - eff_price)
+                stake_abs * (1.0 - eff_price) - liability_abs * eff_price
             )
             pnl = gross * (1.0 - commission_pct) if gross > 0 else gross
             commission_paid = gross * commission_pct if gross > 0 else 0.0
@@ -314,13 +320,14 @@ class PaperBroker:
                 commission_paid = 0.0
         else:  # lay
             if resolution == "NO":
-                commission_paid = liability_abs * commission_pct
-                pnl = liability_abs - commission_paid
+                commission_paid = stake_abs * commission_pct
+                pnl = stake_abs - commission_paid
             else:  # YES — lay loses
                 pnl = -liability_abs
                 commission_paid = 0.0
 
-        state.bankroll += pnl
+        cost = stake_abs if direction == "back" else liability_abs
+        state.bankroll += cost + pnl
 
         exit_ts = _utc_now()
 

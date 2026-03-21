@@ -229,33 +229,37 @@ class TestSettlePosition:
         return state, "mkt-1"
 
     def test_settle_back_yes_pnl(self, broker, fresh_state):
-        """back + YES: gross = stake * (1/price - 1); pnl = gross * (1 - commission)."""
+        """back + YES: gross = stake * (1/price - 1); pnl = gross * (1 - commission).
+        Escrow: bankroll += stake (returned) + pnl."""
         state, market_id = self._setup_back_position(broker, fresh_state,
                                                       entry_price=0.50, f_final=0.05)
         stake_abs = 0.05 * DEFAULT_BANKROLL   # 50.0
-        bankroll_pre_settle = state.bankroll
+        bankroll_pre_settle = state.bankroll   # 950.0
 
         state, trade = broker.settle_position(state, market_id, "YES", 1.0)
 
         gross = stake_abs * (1.0 / 0.50 - 1.0)          # 50 * 1 = 50
         expected_pnl = gross * (1.0 - 0.05)             # 50 * 0.95 = 47.5
         assert trade.pnl == pytest.approx(expected_pnl, rel=1e-4)
-        assert state.bankroll == pytest.approx(bankroll_pre_settle + expected_pnl, rel=1e-4)
+        # Escrow return: bankroll += cost + pnl = 50 + 47.5 = 97.5
+        assert state.bankroll == pytest.approx(bankroll_pre_settle + stake_abs + expected_pnl, rel=1e-4)
 
     def test_settle_back_no_pnl(self, broker, fresh_state):
-        """back + NO: pnl = -stake_abs."""
+        """back + NO: pnl = -stake_abs. Escrow: cost + pnl = stake + (-stake) = 0."""
         state, market_id = self._setup_back_position(broker, fresh_state,
                                                       entry_price=0.50, f_final=0.05)
         stake_abs = 0.05 * DEFAULT_BANKROLL
-        bankroll_pre = state.bankroll
+        bankroll_pre = state.bankroll   # 950
 
         state, trade = broker.settle_position(state, market_id, "NO", 0.0)
 
         assert trade.pnl == pytest.approx(-stake_abs, rel=1e-4)
-        assert state.bankroll == pytest.approx(bankroll_pre - stake_abs, rel=1e-4)
+        # Escrow consumed: cost + pnl = 50 + (-50) = 0 → bankroll unchanged
+        assert state.bankroll == pytest.approx(bankroll_pre, rel=1e-4)
 
     def test_settle_lay_no_pnl(self, broker, fresh_state):
-        """lay + NO: pnl = stake_abs * (1 - commission_pct)."""
+        """lay + NO: pnl = stake_abs * (1 - commission_pct).
+        Escrow: bankroll += liability (returned) + pnl."""
         # Set up a lay position
         state, trade = broker.execute(
             state=fresh_state,
@@ -274,16 +278,18 @@ class TestSettlePosition:
         )
         assert trade is not None
         stake_abs = trade.stake_abs
+        liability_abs = state.positions["mkt-lay"].liability_abs
         bankroll_pre = state.bankroll
 
         state, settled = broker.settle_position(state, "mkt-lay", "NO", 0.0)
 
         expected_pnl = stake_abs * (1.0 - 0.05)
         assert settled.pnl == pytest.approx(expected_pnl, rel=1e-4)
-        assert state.bankroll == pytest.approx(bankroll_pre + expected_pnl, rel=1e-4)
+        # Escrow return: bankroll += liability + pnl
+        assert state.bankroll == pytest.approx(bankroll_pre + liability_abs + expected_pnl, rel=1e-4)
 
     def test_settle_lay_yes_pnl(self, broker, fresh_state):
-        """lay + YES: pnl = -liability_abs."""
+        """lay + YES: pnl = -liability_abs. Escrow: cost + pnl = liability + (-liability) = 0."""
         state, trade = broker.execute(
             state=fresh_state,
             market_id="mkt-lay",
@@ -306,7 +312,8 @@ class TestSettlePosition:
         state, settled = broker.settle_position(state, "mkt-lay", "YES", 1.0)
 
         assert settled.pnl == pytest.approx(-liability_abs, rel=1e-4)
-        assert state.bankroll == pytest.approx(bankroll_pre - liability_abs, rel=1e-4)
+        # Escrow consumed: cost + pnl = 0 → bankroll unchanged
+        assert state.bankroll == pytest.approx(bankroll_pre, rel=1e-4)
 
     def test_settle_removes_position(self, broker, fresh_state):
         state, _ = self._setup_back_position(broker, fresh_state)
@@ -329,6 +336,42 @@ class TestSettlePosition:
         state, _ = self._setup_back_position(broker, fresh_state)
         state, settled = broker.settle_position(state, "mkt-1", "NO", 0.0)
         assert settled.commission_paid == pytest.approx(0.0)
+
+    def test_settle_lay_no_at_low_price(self, broker, fresh_state):
+        """lay + NO at p=0.30: stake_abs != liability_abs, pnl must use stake_abs."""
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-lay-low",
+            question="Will X?",
+            direction="lay",
+            f_final=0.05,
+            fill_price=0.30,
+            edge=0.05,
+            p_fair=0.25,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.30,
+            available_liquidity=100_000.0,
+        )
+        assert trade is not None
+        pos = state.positions["mkt-lay-low"]
+        stake_abs = pos.stake_abs
+        liability_abs = pos.liability_abs
+        # At p=0.30: stake_abs = liability / (1/0.30 - 1) = liability / 2.333
+        # So stake_abs < liability_abs — they are NOT equal
+        assert stake_abs < liability_abs * 0.99, "At p=0.30 stake should be much less than liability"
+
+        bankroll_pre = state.bankroll
+        state, settled = broker.settle_position(state, "mkt-lay-low", "NO", 0.0)
+
+        expected_pnl = stake_abs * (1.0 - 0.05)
+        assert settled.pnl == pytest.approx(expected_pnl, rel=1e-4)
+        # Must NOT equal liability_abs * (1 - 0.05) — that would be the old wrong formula
+        wrong_pnl = liability_abs * (1.0 - 0.05)
+        assert abs(settled.pnl - wrong_pnl) > 1.0, "P&L must use stake_abs, not liability_abs"
+        # Escrow return: bankroll += liability + pnl
+        assert state.bankroll == pytest.approx(bankroll_pre + liability_abs + expected_pnl, rel=1e-4)
 
 
 # ---------------------------------------------------------------------------
