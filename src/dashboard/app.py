@@ -77,39 +77,27 @@ def _trade_entry_cost(t: dict) -> float:
 def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> pd.DataFrame:
     """Reconstruct equity curve from trade history.
 
-    Equity = cash (bankroll_after) + capital deployed in open positions.
-    Each trade entry deploys capital; each settlement returns it (± P&L).
-    This tracks total equity, not just cash on hand.
+    Uses bankroll_after snapshots from each trade event (entry and settlement)
+    to show the actual cash trajectory. This reflects escrow deductions on
+    entry and capital + P&L returns on settlement.
     """
-    # Build a chronological event stream of entries and settlements
-    events: list[dict] = []
-    for t in trade_history:
-        cost = _trade_entry_cost(t)
-        events.append({
-            "timestamp": t.get("timestamp", ""),
-            "type": "entry",
-            "cost": cost,
-            "pnl": 0,
-        })
-        if t.get("status") == "settled" and t.get("exit_timestamp"):
-            events.append({
-                "timestamp": t["exit_timestamp"],
-                "type": "settle",
-                "cost": cost,
-                "pnl": t.get("pnl", 0) or 0,
-            })
-
     rows = [{"timestamp": "start", "equity": initial_bankroll}]
-    equity = initial_bankroll
-    deployed = 0.0
 
-    for ev in sorted(events, key=lambda e: e["timestamp"]):
-        if ev["type"] == "entry":
-            deployed += ev["cost"]
-        else:  # settle — capital returns, P&L realised
-            deployed -= ev["cost"]
-            equity += ev["pnl"]
-        rows.append({"timestamp": ev["timestamp"], "equity": equity})
+    for t in trade_history:
+        # Entry: bankroll drops by escrowed cost
+        rows.append({
+            "timestamp": t.get("timestamp", ""),
+            "equity": t.get("bankroll_after", initial_bankroll),
+        })
+        # Settlement: bankroll changes by cost + pnl return
+        if t.get("status") == "settled" and t.get("exit_timestamp"):
+            cost = _trade_entry_cost(t)
+            pnl = t.get("pnl", 0) or 0
+            prev_equity = rows[-1]["equity"]
+            rows.append({
+                "timestamp": t["exit_timestamp"],
+                "equity": prev_equity + cost + pnl,
+            })
 
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
