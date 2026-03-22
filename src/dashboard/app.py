@@ -331,12 +331,18 @@ def render_clv_panel(trade_history: list[dict]) -> None:
         st.caption(f"Collecting data — {total_trades_clv}/100 trades with CLV recorded.")
 
 
-def render_position_table(positions: dict) -> None:
-    """Panel 5: Open positions table."""
+def render_position_table(positions: dict, trade_history: list[dict] | None = None) -> None:
+    """Panel 5: Open positions table with model prediction data."""
     st.subheader(f"Open Positions ({len(positions)})")
     if not positions:
         st.info("No open positions.")
         return
+
+    # Build trade lookup for enriching positions with model data
+    trade_by_id: dict[str, dict] = {}
+    if trade_history:
+        for t in trade_history:
+            trade_by_id[t.get("trade_id", "")] = t
 
     rows = []
     for mkt_id, pos in positions.items():
@@ -353,12 +359,23 @@ def render_position_table(positions: dict) -> None:
             if pos.get("direction") == "lay"
             else pos.get("stake_abs", 0)
         )
+
+        # Enrich from matching Trade record
+        trade = trade_by_id.get(pos.get("trade_id", ""), {})
+        edge = trade.get("edge")
+        p_fair = pos.get("p_fair_at_entry") or trade.get("p_fair")
+        conf = trade.get("conf_score")
+        kelly = trade.get("kelly_f_final")
+
         rows.append({
             "Market": pos.get("question", "")[:60],
             "Event": event_date,
-            "Direction": pos.get("direction", ""),
-            "Entry Price": f"{pos.get('entry_price', 0):.3f}",
-            "Size": f"{pos.get('filled_size', 0):.4f}",
+            "Dir": pos.get("direction", ""),
+            "Entry": f"{pos.get('entry_price', 0):.3f}",
+            "P(fair)": f"{p_fair:.3f}" if p_fair else "—",
+            "Edge": f"{edge:.1%}" if edge else "—",
+            "Conf": f"{conf:.0f}" if conf else "—",
+            "Kelly": f"{kelly:.3f}" if kelly else "—",
             "Cost (AUD)": f"{cost:.2f}",
             "Holding (h)": holding_hours(pos.get("entry_timestamp", "")),
         })
@@ -472,7 +489,7 @@ def main() -> None:
 
     st.divider()
 
-    render_position_table(positions)
+    render_position_table(positions, trade_history)
     render_trade_log(trade_history)
 
     st.divider()
