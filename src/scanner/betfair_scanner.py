@@ -259,6 +259,19 @@ def get_markets(
         if start_dt is not None and start_dt > cutoff:
             continue  # Too far in the future — likely a stale futures market
 
+        # Skip markets whose start_time is too far in the PAST — catches
+        # season-long outright/futures markets (e.g. "Premiership Winner 2025/26"
+        # with a market_start_time of Aug 2025).
+        max_age = settings.scanner.betfair_max_market_age_hours
+        if max_age > 0 and start_dt is not None:
+            age_cutoff = now - timedelta(hours=max_age)
+            if start_dt < age_cutoff:
+                logger.debug(
+                    "Skipping market %s — market_start_time %s is older than %dh",
+                    cat.market_id, start_dt.isoformat(), max_age,
+                )
+                continue
+
         prob, total_liquidity, best_back_price, best_lay_price = _liquidity_from_book(book)
 
         # prob is None when no back price falls in [PROB_FLOOR, PROB_CEIL]

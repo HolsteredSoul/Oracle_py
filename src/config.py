@@ -61,6 +61,7 @@ class ScannerConfig(BaseModel):
     betfair_event_types: list[int] = Field(default_factory=list)
     betfair_country_codes: list[str] = Field(default_factory=lambda: ["AU"])
     betfair_hours_ahead: int = Field(default=72, gt=0)
+    betfair_max_market_age_hours: int = Field(default=168, ge=0)
 
     @field_validator("manifold_min_prob_range")
     @classmethod
