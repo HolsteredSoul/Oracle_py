@@ -28,7 +28,8 @@ main.py (30-min scan cycle)
     ├── enrichment/trigger.py      — Decide: light scan or deep trigger?
     │       ├── enrichment/news.py       — NewsData.io + Google News RSS
     │       ├── enrichment/x_sentiment.py — X API v2 tweet search
-    │       └── enrichment/stats.py      — Football-data.org + Squiggle stats
+    │       ├── enrichment/stats.py      — Football-data.org + Squiggle stats
+    │       └── enrichment/team_mapping.py — Team name resolution (index + Perplexity fallback)
     │
     ├── llm/client.py              — OpenRouter wrapper (cost tracking, tier routing)
     │       ├── llm/prompts.py           — JSON-forced prompt templates
@@ -213,7 +214,7 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | 5 | Backtesting & Tuning — historical replay, parameter sweep | Not started |
 | 6 | Live Betfair — OMS, market mapping, safeguards | Not started |
 
-149 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution, team mapping, and Betfair scanner modules.
+181 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution, team mapping, and Betfair scanner modules.
 
 ---
 
@@ -230,7 +231,7 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | `src/execution/paper.py` | Paper broker simulation |
 | `src/dashboard/app.py` | Streamlit monitoring UI |
 | `src/enrichment/stats.py` | Statistical data fetcher (football-data.org, Squiggle) |
-| `src/enrichment/team_mapping.py` | Betfair → stats API team name resolution (dynamic index) |
+| `src/enrichment/team_mapping.py` | Betfair → stats API team name resolution (index + Perplexity fallback) |
 | `src/strategy/statistical_model.py` | Poisson match outcome prediction model |
 
 ---

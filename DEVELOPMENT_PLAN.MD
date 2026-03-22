@@ -494,7 +494,11 @@ class AFLStats(BaseModel):
 ```python
 def betfair_to_stats_name(betfair_name: str, sport: str) -> str:
     """Map Betfair runner names to football-data.org / Squiggle team names.
-    Uses fuzzy matching with a manual override dict for known mismatches."""
+    Uses fuzzy matching with a manual override dict for known mismatches.
+    Falls back to Perplexity Sonar when fuzzy matching fails — asks Perplexity
+    to match the Betfair name against the full football-data.org team list.
+    Results (hits and confirmed misses) are cached persistently to
+    state/team_mapping_cache.json so each team is only queried once."""
     ...
 ```
 

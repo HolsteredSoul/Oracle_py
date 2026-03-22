@@ -3,6 +3,8 @@
 from unittest.mock import patch
 
 from src.enrichment.team_mapping import (
+    _build_canonical_team_list,
+    _parse_perplexity_team_response,
     _resolved_cache,
     parse_teams_from_event,
     resolve_team,
@@ -166,3 +168,141 @@ class TestParseTeamsFromEvent:
     def test_epl_fixture(self):
         result = parse_teams_from_event("Arsenal v Chelsea")
         assert result == ("Arsenal", "Chelsea")
+
+
+# ---------------------------------------------------------------------------
+# Perplexity fallback tests
+# ---------------------------------------------------------------------------
+
+class TestParsePerplexityTeamResponse:
+    """Tests for _parse_perplexity_team_response()."""
+
+    def test_exact_match(self):
+        result = _parse_perplexity_team_response("Arsenal FC", _MOCK_FD_INDEX)
+        assert result is not None
+        assert "arsenal" in result.lower()
+
+    def test_none_sentinel(self):
+        assert _parse_perplexity_team_response("NONE", _MOCK_FD_INDEX) is None
+
+    def test_none_sentinel_lowercase(self):
+        assert _parse_perplexity_team_response("none", _MOCK_FD_INDEX) is None
+
+    def test_multiline_takes_first(self):
+        resp = "Arsenal FC\nThis is the team from North London."
+        result = _parse_perplexity_team_response(resp, _MOCK_FD_INDEX)
+        assert result is not None
+        assert "arsenal" in result.lower()
+
+    def test_normalized_match(self):
+        # "Arsenal" (no FC) should match "arsenal fc" via normalization
+        result = _parse_perplexity_team_response("Arsenal", _MOCK_FD_INDEX)
+        assert result is not None
+
+    def test_empty_response(self):
+        assert _parse_perplexity_team_response("", _MOCK_FD_INDEX) is None
+
+    def test_garbage_response(self):
+        assert _parse_perplexity_team_response("asdfqwerty123", _MOCK_FD_INDEX) is None
+
+
+class TestBuildCanonicalTeamList:
+    """Tests for _build_canonical_team_list()."""
+
+    def test_deduplicates_by_team_id(self):
+        names = _build_canonical_team_list(_MOCK_FD_INDEX)
+        # Each team ID should appear only once
+        assert len(names) == len(set(names))
+        # Arsenal has two keys (arsenal fc: 57, arsenal: 57) but should appear once
+        arsenal_names = [n for n in names if "arsenal" in n.lower()]
+        assert len(arsenal_names) == 1
+
+    def test_returns_nonempty_for_nonempty_index(self):
+        assert len(_build_canonical_team_list(_MOCK_FD_INDEX)) > 0
+
+    def test_empty_index(self):
+        assert _build_canonical_team_list({}) == []
+
+
+@patch(
+    "src.enrichment.team_mapping._get_football_index",
+    return_value=_MOCK_FD_INDEX,
+)
+class TestPerplexityFallback:
+    """Integration tests for the Perplexity fallback path in resolve_team()."""
+
+    def setup_method(self):
+        _resolved_cache.clear()
+
+    @patch("src.enrichment.team_mapping._load_perplexity_cache", return_value={})
+    @patch("src.enrichment.team_mapping._save_perplexity_cache")
+    @patch("src.llm.client.call_perplexity", return_value="Arsenal FC")
+    def test_perplexity_resolves_unknown_team(
+        self, mock_pplx, mock_save, mock_load, _mock_idx
+    ):
+        # "Gunners" won't fuzzy-match but Perplexity returns "Arsenal FC"
+        result = resolve_team("Gunners", "football")
+        assert result is not None
+        assert "arsenal" in result.lower()
+        mock_pplx.assert_called_once()
+        mock_save.assert_called_once()
+
+    @patch(
+        "src.enrichment.team_mapping._load_perplexity_cache",
+        return_value={"gunners|football": "Arsenal Fc"},
+    )
+    @patch("src.llm.client.call_perplexity")
+    def test_disk_cache_hit_skips_api(self, mock_pplx, mock_load, _mock_idx):
+        result = resolve_team("Gunners", "football")
+        # Should return cached value without calling Perplexity
+        assert result == "Arsenal Fc"
+        mock_pplx.assert_not_called()
+
+    @patch(
+        "src.enrichment.team_mapping._load_perplexity_cache",
+        return_value={"some random club|football": None},
+    )
+    @patch("src.llm.client.call_perplexity")
+    def test_cached_none_skips_api(self, mock_pplx, mock_load, _mock_idx):
+        result = resolve_team("Some Random Club", "football")
+        # Cached as None (confirmed miss) — should not call Perplexity
+        assert result is None
+        mock_pplx.assert_not_called()
+
+    @patch("src.enrichment.team_mapping._load_perplexity_cache", return_value={})
+    @patch("src.enrichment.team_mapping._save_perplexity_cache")
+    @patch("src.llm.client.call_perplexity", return_value="NONE")
+    def test_perplexity_none_cached_as_miss(
+        self, mock_pplx, mock_save, mock_load, _mock_idx
+    ):
+        result = resolve_team("Bagmati Province", "football")
+        assert result is None
+        # Should save None to cache
+        saved = mock_save.call_args[0][0]
+        assert saved["bagmati province|football"] is None
+
+    @patch("src.enrichment.team_mapping._load_perplexity_cache", return_value={})
+    @patch("src.enrichment.team_mapping._save_perplexity_cache")
+    @patch("src.llm.client.call_perplexity", return_value=None)
+    def test_api_error_not_cached(
+        self, mock_pplx, mock_save, mock_load, _mock_idx
+    ):
+        result = resolve_team("Some Obscure FC", "football")
+        assert result is None
+        # API error → should NOT cache (allow retry)
+        mock_save.assert_not_called()
+
+    @patch("src.enrichment.team_mapping._load_perplexity_cache", return_value={})
+    @patch("src.enrichment.team_mapping._save_perplexity_cache")
+    @patch(
+        "src.llm.client.call_perplexity",
+        return_value="I think this might be Arsenal FC based on my analysis.",
+    )
+    def test_malformed_response_handles_gracefully(
+        self, mock_pplx, mock_save, mock_load, _mock_idx
+    ):
+        # First line doesn't match any team — should cache as None
+        result = resolve_team("Mystery Team", "football")
+        assert result is None
+        saved = mock_save.call_args[0][0]
+        assert saved["mystery team|football"] is None

@@ -11,18 +11,50 @@ Strategy:
      with full + short names), built dynamically from the API on first use.
      Falls back to fuzzy matching against the index keys.
   4. Tiny override dict for proven Betfair naming quirks only.
-  5. Return None on no confident match — caller falls back to mid_price
+  5. Perplexity fallback: ask Perplexity Sonar to match the Betfair name
+     against the full football-data.org team list.  Results are cached
+     persistently to disk so each team is only queried once.
+  6. Return None on no confident match — caller falls back to mid_price
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from difflib import SequenceMatcher
+from pathlib import Path
+
+from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
 FUZZY_THRESHOLD = 0.70
+
+# ---------------------------------------------------------------------------
+# Persistent Perplexity cache — maps "name_lower|sport" to canonical name
+# or null (confirmed miss).  Stored in state/team_mapping_cache.json.
+# ---------------------------------------------------------------------------
+
+_PERPLEXITY_CACHE_FILE = PROJECT_ROOT / "state" / "team_mapping_cache.json"
+
+
+def _load_perplexity_cache() -> dict[str, str | None]:
+    """Load the persistent Perplexity team mapping cache from disk."""
+    if _PERPLEXITY_CACHE_FILE.exists():
+        try:
+            return json.loads(_PERPLEXITY_CACHE_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_perplexity_cache(cache: dict[str, str | None]) -> None:
+    """Atomically write cache to disk (tmp + rename)."""
+    _PERPLEXITY_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _PERPLEXITY_CACHE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    tmp.replace(_PERPLEXITY_CACHE_FILE)
 
 # ---------------------------------------------------------------------------
 # Betfair-specific overrides — ONLY for names that the football-data.org
@@ -104,6 +136,98 @@ def _get_football_index() -> dict[str, int]:
         return {}
 
 
+def _build_canonical_team_list(index: dict[str, int]) -> list[str]:
+    """Deduplicate the index to one canonical name per team ID."""
+    seen_ids: set[int] = set()
+    names: list[str] = []
+    for key_lower, tid in sorted(index.items()):
+        if tid in seen_ids:
+            continue
+        seen_ids.add(tid)
+        original = _canonical_from_index(key_lower, index)
+        names.append(original)
+    return names
+
+
+def _parse_perplexity_team_response(
+    response: str,
+    index: dict[str, int],
+) -> str | None:
+    """Extract and validate a team name from Perplexity's response."""
+    lines = [ln.strip() for ln in response.strip().splitlines() if ln.strip()]
+    if not lines:
+        return None
+    line = lines[0]
+    if line.upper() == "NONE":
+        return None
+    # Exact match against index
+    if line.lower() in index:
+        return _canonical_from_index(line.lower(), index)
+    # Normalized match (strip FC/AFC/SC)
+    norm = _normalize(line)
+    for idx_key in index:
+        if _normalize(idx_key) == norm:
+            return _canonical_from_index(idx_key, index)
+    return None
+
+
+def _perplexity_resolve(
+    betfair_name: str,
+    sport: str,
+    index: dict[str, int],
+) -> str | None:
+    """Ask Perplexity to map a Betfair name to a football-data.org team.
+
+    Results (including confirmed misses) are cached to disk so each team
+    is queried at most once.  API errors are NOT cached to allow retries.
+    """
+    cache_key = f"{betfair_name.lower().strip()}|{sport}"
+    cache = _load_perplexity_cache()
+
+    # Disk cache hit (value can be None for confirmed misses)
+    if cache_key in cache:
+        return cache[cache_key]
+
+    # Lazy import to avoid circular dependency at module load
+    from src.llm.client import call_perplexity  # noqa: PLC0415
+
+    team_list = "\n".join(_build_canonical_team_list(index))
+    prompt = (
+        "I need to match a team name from a betting exchange to its official "
+        "name in the football-data.org database.\n\n"
+        f'Betting exchange name: "{betfair_name}"\n\n'
+        "Here is the complete list of team names in the football-data.org "
+        "database:\n"
+        f"{team_list}\n\n"
+        "Instructions:\n"
+        "- If the betting exchange name refers to one of the teams above "
+        "(possibly using an abbreviation, nickname, or alternate spelling), "
+        "respond with EXACTLY that team's name from the list, on a single "
+        "line.\n"
+        "- If the team is NOT in the list, respond with exactly: NONE\n"
+        "- Do not include any explanation, just the team name or NONE."
+    )
+
+    raw = call_perplexity(prompt)
+    if raw is None:
+        # API error / cap — don't cache, allow retry next cycle
+        logger.debug("Perplexity unavailable for team mapping of %r", betfair_name)
+        return None
+
+    result = _parse_perplexity_team_response(raw, index)
+
+    # Cache both hits and confirmed misses
+    cache[cache_key] = result
+    _save_perplexity_cache(cache)
+
+    if result is not None:
+        logger.info("Perplexity resolved %r -> %r", betfair_name, result)
+    else:
+        logger.info("Perplexity confirmed %r is not in football-data.org", betfair_name)
+
+    return result
+
+
 def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
     """Map a Betfair runner/event name to the canonical stats API team name.
 
@@ -175,6 +299,12 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
             "Fuzzy-matched %r -> %r (score=%.2f)", betfair_name, canonical, best_score,
         )
         return canonical
+
+    # 4d. Perplexity fallback — ask Perplexity to match against the full index
+    perplexity_result = _perplexity_resolve(betfair_name, sport, index)
+    if perplexity_result is not None:
+        _resolved_cache[cache_key] = perplexity_result
+        return perplexity_result
 
     logger.warning(
         "Team mapping failed for %r (sport=%s, best_score=%.2f) "
