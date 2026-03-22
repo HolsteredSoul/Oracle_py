@@ -13,8 +13,14 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import time
 from pathlib import Path
+
+# Ensure project root is on sys.path when running from scripts/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -31,10 +37,12 @@ def _resolve_from_betfair(market_id: str) -> dict:
         detail = get_market_detail(market_id)
         return {
             "resolution": detail.get("resolution", "UNKNOWN"),
+            "runner_status": detail.get("runner_status"),
             "is_resolved": detail.get("isResolved", False),
             "selection_id": detail.get("selection_id"),
         }
     except Exception as exc:
+        logger.error("  Fetch error for %s: %s", market_id, exc)
         return {"resolution": "FETCH_FAILED", "error": str(exc)}
 
 
@@ -87,10 +95,15 @@ def main() -> None:
         liability_abs = trade.get("liability_abs", 0)
         original_pnl = trade.get("pnl", 0)
 
-        # For lay trades without liability_abs stored, estimate it
-        if direction == "lay" and not liability_abs:
+        # The true escrowed amount is the bankroll delta at entry.
+        # For lay trades, this is the actual liability (not the inflated stake_abs).
+        escrowed = trade.get("bankroll_before", 0) - trade.get("bankroll_after", 0)
+
+        # For lay trades: use escrowed as liability, derive stake from it
+        if direction == "lay":
+            liability_abs = escrowed
             denom = (1.0 / entry_price) - 1.0
-            liability_abs = stake_abs / denom if denom > 0 else 0
+            stake_abs = liability_abs / denom if denom > 0 else 0
 
         logger.info("[%d/%d] %s  dir=%s  entry=%.3f", i + 1, len(settled), market_id, direction, entry_price)
 
