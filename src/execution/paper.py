@@ -280,6 +280,7 @@ class PaperBroker:
         resolution: str,
         resolution_probability: float,
         closing_price: float | None = None,    # Phase 5A.1
+        runner_status: str | None = None,       # raw Betfair runner status
     ) -> tuple[OracleState, Trade]:
         """Settle an open position on market resolution.
 
@@ -375,6 +376,8 @@ class PaperBroker:
                     "commission_paid": round(commission_paid, 4),
                     "closing_price": closing_price,      # Phase 5A.1
                     "clv": clv,                          # Phase 5A.1
+                    "runner_status": runner_status,       # raw Betfair status
+                    "resolution": resolution,             # mapped YES/NO/VOID/MKT
                 })
                 state.trade_history[i] = updated
                 settled_trade = updated

@@ -38,7 +38,7 @@ from src.llm.prompts import (
 from src.logging_setup import configure_logging
 from src.risk.manager import check_risk_gates
 from src.scanner import betfair_scanner
-from src.storage.state_manager import OracleState, StateManager
+from src.storage.state_manager import OracleState, StateManager, Trade
 from src.strategy.bayesian import update_probability
 from src.strategy.edge import executable_edge
 from src.strategy.kelly import apply_oracle_sizing, commission_aware_kelly
@@ -376,6 +376,7 @@ def _settle_betfair_positions(
     """
     max_age_h = settings.scanner.betfair_max_market_age_hours
     now = datetime.now(timezone.utc)
+    newly_settled: list[Trade] = []
 
     for market_id in list(state.positions.keys()):
         pos = state.positions[market_id]
@@ -429,19 +430,97 @@ def _settle_betfair_positions(
 
         if detail.get("isResolved"):
             resolution = detail.get("resolution", "MKT")
+            raw_runner_status = detail.get("runner_status")
             res_prob = detail.get("probability", 0.5)
             closing_price = state.positions[market_id].last_seen_price
             try:
-                state, _ = broker.settle_position(
+                state, settled_trade = broker.settle_position(
                     state, market_id, resolution, res_prob,
                     closing_price=closing_price,
+                    runner_status=raw_runner_status,
                 )
+                newly_settled.append(settled_trade)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Settlement failed for %s: %s", market_id, exc)
+
+    # Post-settlement validation
+    if newly_settled:
+        _validate_settlements(newly_settled)
 
     # Persist updated last_seen_price values even when no settlements occurred
     state_manager.save(state)
     return state
+
+
+def _validate_settlements(trades: list[Trade]) -> None:
+    """Post-cycle sanity checks on newly settled trades.
+
+    Logs warnings for any settlement that looks suspicious:
+    - Used MKT fallback (runner.status was missing/unknown)
+    - exit_price == 0.5 (the old broken-fallback symptom)
+    - P&L sign inconsistent with direction + resolution
+    """
+    for t in trades:
+        market_id = t.market_id
+        prefix = f"Settlement validator | market={market_id}"
+
+        # 1. MKT fallback — should never happen on Betfair now
+        if t.resolution == "MKT" or t.resolution is None:
+            logger.warning(
+                "%s | ALERT: used MKT fallback (runner_status=%r). "
+                "P&L may be wrong.",
+                prefix, t.runner_status,
+            )
+
+        # 2. exit_price stuck at 0.5 — the old bug symptom
+        if t.exit_price is not None and t.exit_price == 0.5:
+            logger.warning(
+                "%s | ALERT: exit_price=0.500 — possible fallback. "
+                "resolution=%s runner_status=%r",
+                prefix, t.resolution, t.runner_status,
+            )
+
+        # 3. runner_status missing when market was supposedly resolved
+        if not t.runner_status:
+            logger.warning(
+                "%s | ALERT: runner_status is empty/None. "
+                "Betfair may not have returned runner data.",
+                prefix,
+            )
+
+        # 4. P&L sign vs direction+resolution consistency
+        if t.pnl is not None and t.resolution in ("YES", "NO"):
+            if t.direction == "back" and t.resolution == "YES" and t.pnl < 0:
+                logger.warning(
+                    "%s | INCONSISTENT: back+YES but pnl=%.4f (negative)",
+                    prefix, t.pnl,
+                )
+            if t.direction == "back" and t.resolution == "NO" and t.pnl > 0:
+                logger.warning(
+                    "%s | INCONSISTENT: back+NO but pnl=%.4f (positive)",
+                    prefix, t.pnl,
+                )
+            if t.direction == "lay" and t.resolution == "NO" and t.pnl < 0:
+                logger.warning(
+                    "%s | INCONSISTENT: lay+NO but pnl=%.4f (negative)",
+                    prefix, t.pnl,
+                )
+            if t.direction == "lay" and t.resolution == "YES" and t.pnl > 0:
+                logger.warning(
+                    "%s | INCONSISTENT: lay+YES but pnl=%.4f (positive)",
+                    prefix, t.pnl,
+                )
+
+        # 5. All clear
+        if (
+            t.resolution in ("YES", "NO", "VOID")
+            and t.runner_status
+            and t.exit_price != 0.5
+        ):
+            logger.info(
+                "%s | OK: resolution=%s runner_status=%s pnl=%.4f",
+                prefix, t.resolution, t.runner_status, t.pnl or 0,
+            )
 
 
 def scan_cycle(

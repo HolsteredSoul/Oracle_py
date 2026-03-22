@@ -73,6 +73,8 @@ class Trade(BaseModel):
     closing_price: Optional[float] = None           # last market price before kickoff suspension
     clv: Optional[float] = None                     # closing line value (positive = good entry)
     selection_id: Optional[int] = None              # Betfair runner selection ID
+    runner_status: Optional[str] = None             # raw Betfair runner status (WINNER/LOSER/REMOVED)
+    resolution: Optional[str] = None                # mapped resolution (YES/NO/VOID/MKT)
 
 
 class Position(BaseModel):

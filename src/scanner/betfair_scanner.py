@@ -503,6 +503,7 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
 
     # Determine resolution from runner status when market is settled/closed.
     resolution = "MKT"  # default fallback
+    raw_runner_status: str | None = None
     if is_resolved and book.runners:
         # Match by selection_id if available, otherwise use runners[0]
         target_runner = None
@@ -514,16 +515,16 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         if target_runner is None:
             target_runner = book.runners[0]
 
-        runner_status = getattr(target_runner, "status", "") or ""
+        raw_runner_status = getattr(target_runner, "status", "") or ""
         _STATUS_MAP = {"WINNER": "YES", "LOSER": "NO"}
-        if runner_status in _STATUS_MAP:
-            resolution = _STATUS_MAP[runner_status]
-        elif runner_status in ("REMOVED", "REMOVED_VACANT"):
+        if raw_runner_status in _STATUS_MAP:
+            resolution = _STATUS_MAP[raw_runner_status]
+        elif raw_runner_status in ("REMOVED", "REMOVED_VACANT"):
             resolution = "VOID"
         else:
             logger.warning(
                 "Unknown runner status %r for market %s — falling back to MKT",
-                runner_status, market_id,
+                raw_runner_status, market_id,
             )
 
     return {
@@ -541,6 +542,7 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         "totalLiquidity": total_liquidity,
         "isResolved": is_resolved,
         "resolution": resolution,
+        "runner_status": raw_runner_status,
         "selection_id": selection_id,
         "market_start_time": start_dt,
     }
