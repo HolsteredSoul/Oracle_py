@@ -143,14 +143,6 @@ def compute_cash_curve(trade_history: list[dict], initial_bankroll: float) -> pd
     return df
 
 
-def compute_drawdown_series(cash_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute rolling max-drawdown series from cash curve."""
-    if cash_df.empty:
-        return pd.DataFrame(columns=["timestamp", "drawdown_pct"])
-    peak = cash_df["cash"].cummax()
-    drawdown = (peak - cash_df["cash"]) / peak.replace(0, float("nan"))
-    return pd.DataFrame({"timestamp": cash_df["timestamp"], "drawdown_pct": drawdown.fillna(0.0)})
-
 
 def holding_hours(entry_timestamp: str) -> float:
     """Compute hours since entry_timestamp (ISO-8601 UTC)."""
@@ -191,27 +183,26 @@ def render_equity_panel(equity_df: pd.DataFrame) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_drawdown_panel(drawdown_df: pd.DataFrame) -> None:
-    """Panel 3: Drawdown chart — rolling max drawdown vs time."""
-    st.subheader("Drawdown")
-    if drawdown_df.empty or len(drawdown_df) < 2:
-        st.info("Not enough data for drawdown chart yet.")
+def render_cash_panel(cash_df: pd.DataFrame) -> None:
+    """Panel 3: Cash / liquidity tracker — available bankroll vs time."""
+    st.subheader("Cash (Available Liquidity)")
+    if cash_df.empty or len(cash_df) < 2:
+        st.info("Not enough data for cash chart yet.")
         return
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=drawdown_df["timestamp"],
-        y=drawdown_df["drawdown_pct"] * 100,
+        x=cash_df["timestamp"],
+        y=cash_df["cash"],
         fill="tozeroy",
-        fillcolor="rgba(239,85,59,0.25)",
-        line=dict(color="#EF553B", width=1.5),
-        name="Drawdown %",
+        fillcolor="rgba(99,110,250,0.20)",
+        line=dict(color="#636EFA", width=2),
+        name="Cash",
     ))
     fig.update_layout(
         xaxis_title="Time",
-        yaxis_title="Drawdown (%)",
-        yaxis=dict(autorange="reversed"),
+        yaxis_title="Cash (AUD)",
         margin=dict(l=0, r=0, t=20, b=0),
-        height=240,
+        height=280,
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -448,16 +439,12 @@ def main() -> None:
             deployed_capital += pos.get("stake_abs", 0)
     equity = bankroll + deployed_capital
 
-    # Drawdown based on equity
-    equity_peak = max(peak, equity)
-    drawdown = (equity_peak - equity) / equity_peak if equity_peak > 0 else 0.0
-
     # --- Top metrics row ---
     st.caption(f"Last updated: {last_updated}")
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Equity", f"${equity:.2f}")
     col2.metric("Cash", f"${bankroll:.2f}")
-    col3.metric("Drawdown", f"{drawdown:.1%}")
+    col3.metric("Deployed", f"${deployed_capital:.2f}")
     col4.metric("Open Positions", len(positions))
     settled_count = sum(1 for t in trade_history if t.get("status") == "settled")
     col5.metric("Settled Trades", settled_count)
@@ -468,13 +455,12 @@ def main() -> None:
     initial_bankroll = 1000.0  # DEFAULT_BANKROLL
     equity_df = compute_equity_curve(trade_history, initial_bankroll)
     cash_df = compute_cash_curve(trade_history, initial_bankroll)
-    drawdown_df = compute_drawdown_series(cash_df)
 
     left, right = st.columns(2)
     with left:
         render_equity_panel(equity_df)
     with right:
-        render_drawdown_panel(drawdown_df)
+        render_cash_panel(cash_df)
 
     render_pnl_panel(trade_history)
     render_clv_panel(trade_history)    # Phase 5A.1
