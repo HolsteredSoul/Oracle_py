@@ -117,13 +117,39 @@ def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> 
     return df
 
 
-def compute_drawdown_series(equity_df: pd.DataFrame) -> pd.DataFrame:
-    """Compute rolling max-drawdown series from equity curve."""
-    if equity_df.empty:
+def compute_cash_curve(trade_history: list[dict], initial_bankroll: float) -> pd.DataFrame:
+    """Reconstruct cash (bankroll) curve from trade history.
+
+    Cash drops on entry (escrow) and returns on settlement (cost + P&L).
+    This is the actual bankroll trajectory, not total equity.
+    """
+    events: list[dict] = []
+    for t in trade_history:
+        cost = _trade_entry_cost(t)
+        events.append({"timestamp": t.get("timestamp", ""), "delta": -cost})
+        if t.get("status") == "settled" and t.get("exit_timestamp"):
+            pnl = t.get("pnl", 0) or 0
+            events.append({"timestamp": t["exit_timestamp"], "delta": cost + pnl})
+
+    rows = [{"timestamp": "start", "cash": initial_bankroll}]
+    cash = initial_bankroll
+    for ev in sorted(events, key=lambda e: e["timestamp"]):
+        cash += ev["delta"]
+        rows.append({"timestamp": ev["timestamp"], "cash": cash})
+
+    df = pd.DataFrame(rows)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    return df
+
+
+def compute_drawdown_series(cash_df: pd.DataFrame) -> pd.DataFrame:
+    """Compute rolling max-drawdown series from cash curve."""
+    if cash_df.empty:
         return pd.DataFrame(columns=["timestamp", "drawdown_pct"])
-    peak = equity_df["equity"].cummax()
-    drawdown = (peak - equity_df["equity"]) / peak.replace(0, float("nan"))
-    return pd.DataFrame({"timestamp": equity_df["timestamp"], "drawdown_pct": drawdown.fillna(0.0)})
+    peak = cash_df["cash"].cummax()
+    drawdown = (peak - cash_df["cash"]) / peak.replace(0, float("nan"))
+    return pd.DataFrame({"timestamp": cash_df["timestamp"], "drawdown_pct": drawdown.fillna(0.0)})
 
 
 def holding_hours(entry_timestamp: str) -> float:
@@ -441,7 +467,8 @@ def main() -> None:
     # --- Charts ---
     initial_bankroll = 1000.0  # DEFAULT_BANKROLL
     equity_df = compute_equity_curve(trade_history, initial_bankroll)
-    drawdown_df = compute_drawdown_series(equity_df)
+    cash_df = compute_cash_curve(trade_history, initial_bankroll)
+    drawdown_df = compute_drawdown_series(cash_df)
 
     left, right = st.columns(2)
     with left:
