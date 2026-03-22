@@ -21,6 +21,7 @@ import re
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 import httpx
 
@@ -43,8 +44,8 @@ _newsdata_calls: list[float] = []
 # Common Betfair boilerplate words to strip when building search queries.
 _STRIP_WORDS = {
     "winner", "match odds", "outright", "to win", "tournament",
-    "season", "2024", "2025", "2026", "2027", "2028",
-}
+    "season",
+} | {str(y) for y in range(datetime.now().year - 2, datetime.now().year + 4)}
 
 
 def rewrite_query(
@@ -203,7 +204,11 @@ def _fetch_google_news_rss(query: str, max_articles: int) -> str:
         response.raise_for_status()
         raw_xml = response.text
 
-    root = ET.fromstring(raw_xml)
+    try:
+        root = ET.fromstring(raw_xml)
+    except ET.ParseError:
+        logger.warning("Google News RSS returned malformed XML for '%s'", query[:60])
+        return ""
     items = root.findall(".//item")[:max_articles]
 
     if not items:

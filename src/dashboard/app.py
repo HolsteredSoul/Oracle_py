@@ -348,13 +348,18 @@ def render_position_table(positions: dict) -> None:
                 event_date = dt.strftime("%b %d %H:%M")
             except (ValueError, TypeError):
                 event_date = mst[:16]
+        cost = (
+            pos.get("liability_abs", 0)
+            if pos.get("direction") == "lay"
+            else pos.get("stake_abs", 0)
+        )
         rows.append({
             "Market": pos.get("question", "")[:60],
             "Event": event_date,
             "Direction": pos.get("direction", ""),
             "Entry Price": f"{pos.get('entry_price', 0):.3f}",
             "Size": f"{pos.get('filled_size', 0):.4f}",
-            "Stake (AUD)": f"{pos.get('stake_abs', 0):.2f}",
+            "Cost (AUD)": f"{cost:.2f}",
             "Holding (h)": holding_hours(pos.get("entry_timestamp", "")),
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)

@@ -17,11 +17,12 @@ Strategy:
 from __future__ import annotations
 
 import logging
+import re
 from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
-_FUZZY_THRESHOLD = 0.65
+FUZZY_THRESHOLD = 0.70
 
 # ---------------------------------------------------------------------------
 # Betfair-specific overrides — ONLY for names that the football-data.org
@@ -167,7 +168,7 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
             best_score = score
             best_key = idx_key
 
-    if best_score >= _FUZZY_THRESHOLD and best_key is not None:
+    if best_score >= FUZZY_THRESHOLD and best_key is not None:
         canonical = _canonical_from_index(best_key, index)
         _resolved_cache[cache_key] = canonical
         logger.debug(
@@ -199,7 +200,7 @@ def _fuzzy_match_aliases(
             best_score = score
             best_match = canonical
 
-    if best_score >= _FUZZY_THRESHOLD and best_match is not None:
+    if best_score >= FUZZY_THRESHOLD and best_match is not None:
         _resolved_cache[cache_key] = best_match
         logger.debug(
             "Fuzzy-matched %r -> %r (score=%.2f)",
@@ -218,21 +219,26 @@ def _fuzzy_match_aliases(
 def _canonical_from_index(key_lower: str, index: dict[str, int]) -> str:
     """Recover proper-cased canonical name from a lowercase index key.
 
-    The index stores lowercase keys. We capitalize the first letter of each
-    word to approximate the original casing. For exact results, the caller
-    can look up the team ID and use the API's canonical name directly.
+    Uses the original casing stored during index build when available,
+    falls back to title-case as an approximation.
     """
-    # Title-case is a reasonable approximation; the stats API will do
-    # its own resolution from this canonical name → team ID.
+    try:
+        from src.enrichment.stats import get_fd_team_name
+        original = get_fd_team_name(key_lower)
+        if original:
+            return original
+    except Exception:
+        pass
     return key_lower.title() if key_lower in index else key_lower
 
 
 def parse_teams_from_event(event_name: str) -> tuple[str, str] | None:
     """Parse 'Home Team v Away Team' from a Betfair event name.
 
+    Handles separators: ' v ', ' vs ', ' vs. ', ' - '.
     Returns (home, away) tuple or None if the format doesn't match.
     """
-    parts = event_name.split(" v ")
+    parts = re.split(r"\s+(?:vs?\.?|-)\s+", event_name, maxsplit=1)
     if len(parts) == 2:
         home = parts[0].strip()
         away = parts[1].strip()

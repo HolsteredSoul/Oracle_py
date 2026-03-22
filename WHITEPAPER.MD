@@ -4,7 +4,7 @@
 **Autonomous Profit-Maximizing Prediction-Market Agent**
 **March 2026**
 **Author:** Pierre (@bandersbase)
-**Scope:** Manifold paper-money (safe tuning & validation) → Betfair Australia live (real-money execution)
+**Scope:** Betfair Australia paper trading (safe tuning & validation) → Betfair Australia live (real-money execution)
 
 ---
 
@@ -302,8 +302,7 @@ kelly_base_fraction = 0.50              # half-Kelly
 
 [scanner]
 poll_interval_sec = 1800                # 30 min base timer
-manifold_min_volume = 500               # ignore thin markets
-manifold_min_prob_range = [0.05, 0.95]  # avoid nearly-resolved markets
+prob_range = [0.05, 0.95]              # avoid nearly-resolved markets
 
 [betfair]
 # Phase 4 only — leave empty during paper trading
@@ -372,7 +371,7 @@ oracle-py/
 ├── WHITEPAPER.MD
 ├── .gitignore                  # Must exclude .env, state/, logs/
 │
-├── data/                       # Historical Manifold dumps (CSV/JSON for backtesting)
+├── data/                       # Historical data (CSV/JSON for backtesting)
 ├── logs/                       # Rotating daily log files
 ├── state/                      # oracle_state.json (bankroll, positions, priors, history)
 │
@@ -401,7 +400,7 @@ oracle-py/
 │   │
 │   ├── scanner/
 │   │   ├── __init__.py
-│   │   └── manifold.py         # Manifold API: market list, prices, volumes
+│   │   └── betfair_scanner.py  # Betfair Exchange: market list, prices, volumes
 │   │
 │   ├── risk/
 │   │   ├── __init__.py
@@ -409,8 +408,8 @@ oracle-py/
 │   │
 │   ├── execution/
 │   │   ├── __init__.py
-│   │   ├── paper.py            # Manifold paper-money simulation
-│   │   └── betfair_oms.py      # Phase 4: OMS state machine, FOK, synthetic TIF
+│   │   ├── paper.py            # Betfair paper trading simulation
+│   │   └── betfair_oms.py      # Phase 6: live OMS state machine, FOK, synthetic TIF
 │   │
 │   ├── dashboard/
 │   │   ├── __init__.py
@@ -470,7 +469,6 @@ pytest-asyncio>=0.23
 > **OpenRouter:** Call via `httpx` with `Authorization: Bearer <key>` to `https://openrouter.ai/api/v1/chat/completions`. No additional SDK required.
 > **X API v2:** Use `httpx` with OAuth 2.0 Bearer token. Free tier limits apply.
 > **NewsData.io:** REST API via `httpx`. Free tier: 200 credits/day.
-> **Manifold:** Public REST API, no auth required for read-only access.
 > **football-data.org:** REST API via `httpx` with `X-Auth-Token` header. Free tier: 10 requests/minute, covers major European leagues (EPL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Championship).
 > **Squiggle API:** Public REST API via `httpx`, no auth required. Provides AFL match predictions, team ratings, and historical results.
 > **Betfair:** `betfairlightweight` library (Phase 4 only).

@@ -421,6 +421,15 @@ class PaperBroker:
 
         cancel_ts = _utc_now()
 
+        # Capture CLV from last_seen_price (same formula as settle_position)
+        closing_price = position.last_seen_price
+        clv = None
+        if closing_price is not None:
+            if position.direction == "back":
+                clv = round(closing_price - position.entry_price, 6)
+            else:  # lay
+                clv = round(position.entry_price - closing_price, 6)
+
         cancelled_trade: Trade | None = None
         for i, t in enumerate(state.trade_history):
             if t.trade_id == position.trade_id:
@@ -429,6 +438,8 @@ class PaperBroker:
                     "exit_timestamp": cancel_ts,
                     "pnl": 0.0,
                     "commission_paid": 0.0,
+                    "closing_price": closing_price,
+                    "clv": clv,
                 })
                 state.trade_history[i] = updated
                 cancelled_trade = updated

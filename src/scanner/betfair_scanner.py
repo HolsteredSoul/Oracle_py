@@ -32,6 +32,7 @@ Dict shape:
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import betfairlightweight
@@ -45,8 +46,13 @@ logger = logging.getLogger(__name__)
 # Module-level client — created once, reused across calls.
 _client: betfairlightweight.APIClient | None = None
 
+# Re-auth backoff: avoid rapid-fire login attempts on persistent failures.
+_last_auth_failure: float = 0.0
+_AUTH_COOLDOWN = 60.0  # seconds
+
 _RESOLVED_STATUSES = {"CLOSED", "SETTLED"}
 _PROB_FLOOR = 0.05
+_API_TIMEOUT = 30  # seconds — applied to betfairlightweight session
 _PROB_CEIL = 0.95
 # Betfair's TOO_MUCH_DATA limit is response-size based, not market count.
 # AU horse-racing markets have 8-20 runners each; empirical safe limit ~40 per call.
@@ -76,8 +82,25 @@ def _create_and_login() -> betfairlightweight.APIClient:
         password=settings.betfair_password,
         app_key=settings.betfair_app_key,
     )
+    client.session.timeout = _API_TIMEOUT
     client.login_interactive()
     logger.info("Betfair interactive login successful.")
+    return client
+
+
+def _reauth_with_backoff() -> betfairlightweight.APIClient:
+    """Re-authenticate with cooldown to avoid rapid-fire login attempts."""
+    global _last_auth_failure  # noqa: PLW0603
+    now = time.monotonic()
+    if now - _last_auth_failure < _AUTH_COOLDOWN:
+        wait = _AUTH_COOLDOWN - (now - _last_auth_failure)
+        logger.warning("Betfair re-auth cooldown: waiting %.0fs before retry.", wait)
+        time.sleep(wait)
+    try:
+        client = _create_and_login()
+    except Exception:
+        _last_auth_failure = time.monotonic()
+        raise
     return client
 
 
@@ -97,10 +120,10 @@ def _get_client() -> betfairlightweight.APIClient:
         except (betfairlightweight.exceptions.APIError,
                 betfairlightweight.exceptions.InvalidResponse) as exc:
             logger.warning("Betfair session expired (%s) — re-authenticating.", exc)
-            _client = _create_and_login()
+            _client = _reauth_with_backoff()
         except Exception as exc:
             logger.error("Unexpected Betfair error during health check: %s", exc)
-            _client = _create_and_login()
+            _client = _reauth_with_backoff()
     return _client
 
 
@@ -346,6 +369,15 @@ def get_markets(
             "away_team": away_team,
             "event_type_id": str(event_type_id),
         })
+
+    # Deduplicate by market ID (catalogue can return duplicates across batches)
+    seen_ids: set[str] = set()
+    deduped: list[dict] = []
+    for m in markets:
+        if m["id"] not in seen_ids:
+            seen_ids.add(m["id"])
+            deduped.append(m)
+    markets = deduped
 
     # Sort: MATCH_ODDS first, then by start time ascending (None last)
     def _sort_key(m: dict) -> tuple[int, datetime]:

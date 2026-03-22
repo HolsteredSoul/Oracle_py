@@ -19,7 +19,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from src.config import settings
-from src.enrichment.team_mapping import resolve_team
+from src.enrichment.team_mapping import FUZZY_THRESHOLD, resolve_team
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,8 @@ def _compute_completeness(stats: MatchStats) -> float:
 
 # Team ID cache: canonical name -> football-data.org team ID
 _team_id_cache: dict[str, int | None] = {}
+# Original casing cache: lowercase key -> original API name
+_team_name_cache: dict[str, str] = {}
 
 # Rate limiter: football-data.org free tier allows 10 requests per minute.
 # Track timestamps of recent requests and pause when approaching the limit.
@@ -173,8 +175,10 @@ def _fd_build_team_index() -> None:
             short = team.get("shortName", "")
             if tid and name:
                 _team_id_cache[name.lower()] = tid
+                _team_name_cache[name.lower()] = name
                 if short:
                     _team_id_cache[short.lower()] = tid
+                    _team_name_cache[short.lower()] = short
 
     logger.info("football-data.org team index built: %d entries", len(_team_id_cache))
 
@@ -187,6 +191,12 @@ def get_fd_team_index() -> dict[str, int]:
     """
     _fd_build_team_index()
     return _team_id_cache
+
+
+def get_fd_team_name(key_lower: str) -> str | None:
+    """Return the original-cased team name for a lowercase key, or None."""
+    _fd_build_team_index()
+    return _team_name_cache.get(key_lower)
 
 
 def _normalize_for_lookup(name: str) -> str:
@@ -222,7 +232,7 @@ def _fd_resolve_team_id(canonical_name: str) -> int | None:
             best_score = score
             best_id = tid
 
-    if best_score >= 0.70 and best_id is not None:
+    if best_score >= FUZZY_THRESHOLD and best_id is not None:
         _team_id_cache[key] = best_id
         logger.debug("Fuzzy-matched team %r to ID %d (score=%.2f)", canonical_name, best_id, best_score)
         return best_id
@@ -311,6 +321,53 @@ def _fd_league_position(team_id: int) -> int | None:
     return None
 
 
+def _fd_head_to_head(
+    home_id: int, away_id: int, limit: int = 50,
+) -> tuple[int, int, int, int]:
+    """Fetch head-to-head record between two teams from football-data.org.
+
+    Returns (home_wins, draws, away_wins, total_matches).
+    Uses the home team's match history and filters for meetings with away_id.
+    """
+    data = _fd_get(f"/teams/{home_id}/matches", params={"status": "FINISHED", "limit": limit})
+    if not data or not isinstance(data, dict):
+        return 0, 0, 0, 0
+
+    home_wins = draws = away_wins = 0
+    for m in data.get("matches", []):
+        h_id = m.get("homeTeam", {}).get("id")
+        a_id = m.get("awayTeam", {}).get("id")
+        if not ({h_id, a_id} == {home_id, away_id}):
+            continue
+
+        score = m.get("score", {})
+        ft = score.get("fullTime", {})
+        hg, ag = ft.get("home"), ft.get("away")
+        if hg is None or ag is None:
+            continue
+
+        # Determine result relative to home_id (not necessarily the home side in this match)
+        if h_id == home_id:
+            if hg > ag:
+                home_wins += 1
+            elif hg == ag:
+                draws += 1
+            else:
+                away_wins += 1
+        else:  # home_id was away in this fixture
+            if ag > hg:
+                home_wins += 1
+            elif hg == ag:
+                draws += 1
+            else:
+                away_wins += 1
+
+    total = home_wins + draws + away_wins
+    if total:
+        logger.debug("H2H: %d meetings (home_id=%d: %dW %dD %dL)", total, home_id, home_wins, draws, away_wins)
+    return home_wins, draws, away_wins, total
+
+
 def _fetch_football_stats(home_canonical: str, away_canonical: str) -> MatchStats | None:
     """Fetch football stats from football-data.org."""
     home_id = _fd_resolve_team_id(home_canonical)
@@ -336,6 +393,17 @@ def _fetch_football_stats(home_canonical: str, away_canonical: str) -> MatchStat
         stats.away_goals_conceded_avg = conceded
         stats.away_league_position = _fd_league_position(away_id)
 
+    # H2H — best-effort, don't fail the whole stats fetch
+    if home_id is not None and away_id is not None:
+        try:
+            hw, dr, aw, total = _fd_head_to_head(home_id, away_id)
+            stats.h2h_home_wins = hw
+            stats.h2h_draws = dr
+            stats.h2h_away_wins = aw
+            stats.h2h_total_matches = total
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("H2H fetch failed for %s vs %s: %s", home_canonical, away_canonical, exc)
+
     stats.data_completeness = _compute_completeness(stats)
     return stats
 
@@ -345,8 +413,8 @@ def _fetch_football_stats(home_canonical: str, away_canonical: str) -> MatchStat
 # ---------------------------------------------------------------------------
 
 
-def _squiggle_get(endpoint: str, params: dict | None = None) -> list | None:
-    """GET request to Squiggle API."""
+def _squiggle_get(endpoint: str, params: dict | None = None) -> dict | list | None:
+    """GET request to Squiggle API. Returns parsed JSON (dict or list) or None on error."""
     url = f"{settings.stats.afl_api_base}/{endpoint}"
     headers = {"User-Agent": "Oracle_py/1.0 (https://github.com/HolsteredSoul/Oracle_py)"}
     try:

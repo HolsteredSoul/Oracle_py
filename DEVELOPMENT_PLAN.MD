@@ -10,7 +10,7 @@ Six sequential phases. Each phase has a clear exit gate — a set of conditions 
 
 | Phase | Name | Exit Gate |
 |---|---|---|
-| 1 | Foundation | Project boots, reads config, polls Manifold |
+| 1 | Foundation | Project boots, reads config, polls Betfair AU |
 | 2 | Intelligence | LLM calls return valid JSON, Bayesian updater works |
 | 3 | Strategy & Risk | Kelly math validated by unit tests, risk gates fire correctly |
 | 4 | Paper Trading | 50+ paper trades logged, P&L tracking accurate |
@@ -21,7 +21,7 @@ Six sequential phases. Each phase has a clear exit gate — a set of conditions 
 
 ## Phase 1: Foundation
 
-**Goal:** Working project skeleton that boots, loads config, and fetches live Manifold data.
+**Goal:** Working project skeleton that boots, loads config, and fetches live Betfair AU data.
 
 ### Tasks
 
@@ -46,11 +46,11 @@ oracle-py/
 - ~~Fail fast with clear error if required keys missing~~
 - ~~**Test:** `python -c "from src.config import settings; print(settings)"` succeeds~~
 
-**1.3 — Manifold scanner (`src/scanner/manifold.py`)** ✅ *Completed 2026-03-13*
-- ~~`get_markets(limit=100, min_volume=500)` → list of market dicts~~
-- ~~`get_market_detail(market_id)` → full order book with best ask/bid~~
+**1.3 — Betfair scanner (`src/scanner/betfair_scanner.py`)** ✅ *Completed 2026-03-13*
+- ~~`get_markets(country_codes=["AU"])` → list of market dicts~~
+- ~~`get_market_detail(market_id)` → dict with probability, back/lay prices, liquidity~~
 - ~~Filter: exclude resolved, exclude near-boundary (prob < 0.05 or > 0.95)~~
-- ~~HTTP client: `httpx` with 10s timeout, no auth required~~
+- ~~Interactive login via `betfairlightweight`~~
 - ~~**Test:** Prints 5 live markets with current prices~~
 
 **1.4 — Logging setup** ✅ *Completed 2026-03-13*
@@ -65,7 +65,7 @@ oracle-py/
 
 **Phase 1 Exit Gate:** ✅ *Completed 2026-03-14*
 - [x] `python main.py` runs without errors for 1 hour
-- [x] Logs show regular 30-min scan cycles with Manifold market counts
+- [x] Logs show regular 30-min scan cycles with Betfair market counts
 - [x] Config validation catches a bad value and prints a clear error
 
 ---
@@ -182,7 +182,7 @@ def check_risk_gates(f, conf_score, current_exposure, drawdown_pct, config) -> t
 
 ## Phase 4: Paper Trading
 
-**Goal:** Full end-to-end cycle running on Manifold paper money with logged P&L.
+**Goal:** Full end-to-end cycle running on Betfair AU paper trading with logged P&L.
 
 ### Tasks
 
@@ -220,16 +220,14 @@ class StateManager:
 - Run paper trading for 48 hours
 - Verify: ≥ 3 trades executed, P&L tracked correctly, no state corruption
 
-**4.6 — Betfair paper scanner (`src/scanner/betfair_scanner.py`)** ✅ *Completed 2026-03-15*
-- ~~`get_markets(country_codes=["AU"])` → list of market dicts (same shape as manifold.py)~~
+**4.6 — Betfair paper scanner** ✅ *Completed 2026-03-15*
+- ~~`get_markets(country_codes=["AU"])` → list of market dicts~~
 - ~~`get_market_detail(market_id)` → dict with `id`, `question`, `probability`, `volume`, `url`, `totalLiquidity`, `isResolved`, `resolution`~~
 - ~~`probability = 1 / best_back_price`; `totalLiquidity = sum(back_sizes + lay_sizes)`; `isResolved = status in {CLOSED, SETTLED}`~~
 - ~~Interactive login via `betfairlightweight` (no cert files required)~~
-- ~~`--betfair-paper` flag wired in `main.py`; `PaperBroker` unchanged~~
-- ~~Settlement uses `_settle_betfair_positions()` in `main.py` to call `betfair_scanner.get_market_detail()` instead of Manifold~~
-- ~~`MANIFOLD_API_KEY` added to `.env` and `src/config.py`~~
+- ~~`PaperBroker` uses Betfair market data directly~~
+- ~~Settlement uses `_settle_betfair_positions()` in `main.py`~~
 - ~~18 unit tests in `tests/test_betfair_scanner.py` (mocked API, no network required)~~
-- ~~**Test:** `pytest tests/test_betfair_scanner.py` — 18/18 pass; full suite 102/102 pass~~
 
 **Phase 4 Exit Gate:**
 - [ ] 50 paper trades logged over ≥ 1 week
@@ -246,8 +244,8 @@ class StateManager:
 ### Tasks
 
 **5.1 — Historical data collection**
-- Download Manifold historical resolved markets via API
-- Store as `data/manifold_historical_YYYY-MM.json`
+- Collect Betfair AU historical resolved markets from paper trading logs
+- Store as `data/betfair_historical_YYYY-MM.json`
 - Target: ≥ 3 months of resolved markets with price history
 
 **5.2 — Backtest harness (`src/backtesting/harness.py`)**
@@ -300,9 +298,9 @@ Tune these parameters via grid search:
 - Test: authenticate, call `list_event_types()`, log result
 
 **6.2 — Market mapper**
-- Map Manifold-style question categories to Betfair event types
-- Start with a single category (e.g. Politics) to limit scope
-- `get_betfair_markets(event_type_id)` → list of Betfair MarketBook objects
+- Map event types to Betfair market types (MATCH_ODDS, DRAW_NO_BET, WINNER)
+- Start with football (event_type 1) and AFL (event_type 61)
+- Already implemented via `betfair_event_types` config and `_SAFE_MARKET_TYPES` filter
 
 **6.3 — OMS state machine (`src/execution/betfair_oms.py`)**
 ```python
@@ -387,7 +385,7 @@ def test_kelly_never_exceeds_one(p_fair, q_market, gamma):
 Do not reorder these. Each step depends on the previous.
 
 ```
-config.py ──► scanner/manifold.py ──► llm/client.py ──► llm/prompts.py
+config.py ──► scanner/betfair_scanner.py ──► llm/client.py ──► llm/prompts.py
     │
     └──► strategy/edge.py ──► strategy/bayesian.py ──► strategy/kelly.py
                                                               │

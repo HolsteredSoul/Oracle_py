@@ -70,6 +70,31 @@ def _execute_back(
     )
 
 
+def _execute_lay(
+    broker: PaperBroker,
+    state: OracleState,
+    market_id: str = "mkt-lay",
+    f_final: float = 0.05,
+    fill_price: float = 0.50,
+    available_liquidity: float = 100_000.0,
+) -> tuple[OracleState, object]:
+    return broker.execute(
+        state=state,
+        market_id=market_id,
+        question="Will X happen?",
+        direction="lay",
+        f_final=f_final,
+        fill_price=fill_price,
+        edge=0.05,
+        p_fair=0.45,
+        kelly_f_star=0.10,
+        kelly_f_final=f_final,
+        conf_score=70.0,
+        uncertainty_penalty=0.30,
+        available_liquidity=available_liquidity,
+    )
+
+
 # ---------------------------------------------------------------------------
 # derive_spread
 # ---------------------------------------------------------------------------
@@ -374,5 +399,76 @@ class TestSettlePosition:
         assert abs(settled.pnl - wrong_pnl) > 1.0, "P&L must use stake_abs, not liability_abs"
         # Escrow return: bankroll += liability + pnl
         assert state.bankroll == pytest.approx(bankroll_pre + liability_abs + expected_pnl, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# cancel_position
+# ---------------------------------------------------------------------------
+
+class TestCancelPosition:
+    def test_cancel_back_refunds_stake(self, broker, fresh_state):
+        """Cancelling a back position refunds stake_abs to bankroll."""
+        state, trade = _execute_back(broker, fresh_state, market_id="mkt-c1")
+        stake_abs = state.positions["mkt-c1"].stake_abs
+        bankroll_pre = state.bankroll
+
+        state, cancelled = broker.cancel_position(state, "mkt-c1", reason="test")
+
+        assert state.bankroll == pytest.approx(bankroll_pre + stake_abs, rel=1e-4)
+        assert cancelled.pnl == 0.0
+
+    def test_cancel_lay_refunds_liability(self, broker, fresh_state):
+        """Cancelling a lay position refunds liability_abs to bankroll."""
+        state, trade = _execute_lay(broker, fresh_state, market_id="mkt-c2")
+        liability_abs = state.positions["mkt-c2"].liability_abs
+        bankroll_pre = state.bankroll
+
+        state, cancelled = broker.cancel_position(state, "mkt-c2", reason="test")
+
+        assert state.bankroll == pytest.approx(bankroll_pre + liability_abs, rel=1e-4)
+        assert cancelled.pnl == 0.0
+
+    def test_cancel_sets_status_and_timestamp(self, broker, fresh_state):
+        """Cancelled trade has status='cancelled' and exit_timestamp set."""
+        state, _ = _execute_back(broker, fresh_state, market_id="mkt-c3")
+        state, cancelled = broker.cancel_position(state, "mkt-c3")
+
+        assert cancelled.status == "cancelled"
+        assert cancelled.exit_timestamp is not None
+
+    def test_cancel_removes_position(self, broker, fresh_state):
+        """Position is removed from state after cancellation."""
+        state, _ = _execute_back(broker, fresh_state, market_id="mkt-c4")
+        assert "mkt-c4" in state.positions
+
+        state, _ = broker.cancel_position(state, "mkt-c4")
+        assert "mkt-c4" not in state.positions
+
+    def test_cancel_captures_clv(self, broker, fresh_state):
+        """CLV is computed from last_seen_price when available."""
+        state, _ = _execute_back(broker, fresh_state, market_id="mkt-c5", fill_price=0.50)
+        # Simulate a price update during scan cycle
+        state.positions["mkt-c5"].last_seen_price = 0.55
+
+        state, cancelled = broker.cancel_position(state, "mkt-c5")
+
+        assert cancelled.closing_price == 0.55
+        # back CLV = closing_price - entry_price = 0.55 - 0.50 = 0.05
+        assert cancelled.clv == pytest.approx(0.05, abs=1e-5)
+
+    def test_cancel_clv_none_when_no_last_seen(self, broker, fresh_state):
+        """CLV stays None when last_seen_price was never set."""
+        state, _ = _execute_back(broker, fresh_state, market_id="mkt-c6")
+        assert state.positions["mkt-c6"].last_seen_price is None
+
+        state, cancelled = broker.cancel_position(state, "mkt-c6")
+
+        assert cancelled.closing_price is None
+        assert cancelled.clv is None
+
+    def test_cancel_nonexistent_raises(self, broker, fresh_state):
+        """Cancelling a non-existent position raises KeyError."""
+        with pytest.raises(KeyError):
+            broker.cancel_position(fresh_state, "no-such-market")
 
 

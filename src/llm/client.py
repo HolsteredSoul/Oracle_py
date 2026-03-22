@@ -253,6 +253,29 @@ def call_llm(
 # Perplexity Sonar — grounded web search for edge candidates (Tier 2)
 # ---------------------------------------------------------------------------
 
+@retry(
+    retry=retry_if_exception(_is_retryable),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(3),
+    reraise=True,
+)
+def _call_perplexity_http(model: str, prompt: str) -> httpx.Response:
+    """Make a single HTTP call to OpenRouter for Perplexity. Retried by tenacity."""
+    headers = {
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/HolsteredSoul/Oracle_py",
+    }
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    with httpx.Client(timeout=_TIMEOUT) as client:
+        response = client.post(_OPENROUTER_URL, json=payload, headers=headers)
+        response.raise_for_status()
+    return response
+
+
 def call_perplexity(prompt: str) -> str | None:
     """Call Perplexity Sonar via OpenRouter for grounded web search.
 
@@ -270,22 +293,11 @@ def call_perplexity(prompt: str) -> str | None:
         return None
 
     model = settings.llm.perplexity_model
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://github.com/HolsteredSoul/Oracle_py",
-    }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-    }
 
     try:
-        with httpx.Client(timeout=_TIMEOUT) as client:
-            response = client.post(_OPENROUTER_URL, json=payload, headers=headers)
-            response.raise_for_status()
+        response = _call_perplexity_http(model, prompt)
     except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-        logger.warning("Perplexity call failed: %s", exc)
+        logger.warning("Perplexity call failed after retries: %s", exc)
         return None
 
     data = response.json()
@@ -294,8 +306,13 @@ def call_perplexity(prompt: str) -> str | None:
         _add_spend(cost)
         logger.debug("Perplexity cost: $%.6f | daily total: $%.4f", cost, _get_today_spend())
 
+    choices = data.get("choices") or []
+    if not choices:
+        logger.error("Perplexity returned empty choices: %s", str(data)[:300])
+        return None
+
     try:
-        content = data["choices"][0]["message"]["content"]
+        content = choices[0]["message"]["content"]
     except (KeyError, IndexError):
         logger.error("Unexpected Perplexity response: %s", str(data)[:300])
         return None

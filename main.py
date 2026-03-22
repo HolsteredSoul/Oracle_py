@@ -281,6 +281,14 @@ def _analyse_and_trade(
                     )
                     return
 
+                # Re-fetch prices — market may have moved during Perplexity call
+                try:
+                    fresh = betfair_scanner.get_market_detail(market_id)
+                    p_ask = fresh.get("p_back") or PaperBroker.derive_spread(fresh["probability"])[0]
+                    p_bid = fresh.get("p_lay") or PaperBroker.derive_spread(fresh["probability"])[1]
+                except Exception:  # noqa: BLE001
+                    pass  # keep existing p_ask/p_bid if re-fetch fails
+
                 back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
                 lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")
 
