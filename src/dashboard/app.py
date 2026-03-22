@@ -28,6 +28,7 @@ _STATE_PATH = Path("state/oracle_state.json")
 _SPEND_PATH = Path("state/llm_spend.json")
 _REFRESH_INTERVAL_SEC = 60
 _DAILY_CAP_USD = 5.0   # default; overridden by spend file if available
+_TRIGGER_SCAN_PATH = Path("state/trigger_scan")
 _LOCAL_TZ = timezone(timedelta(hours=8))  # WAST (Perth)
 _DISPLAY_FMT = "%b %d, %I:%M %p"          # e.g. "Mar 22, 09:30 PM"
 
@@ -487,7 +488,11 @@ def main() -> None:
     equity = bankroll + deployed_capital
 
     # --- Top metrics row ---
-    st.caption(f"Last updated: {_to_local(last_updated)}")
+    _upd_col, _btn_col = st.columns([4, 1])
+    _upd_col.caption(f"Last updated: {_to_local(last_updated)}")
+    if _btn_col.button("▶ Run Scan", help="Trigger an immediate scan cycle"):
+        _TRIGGER_SCAN_PATH.touch()
+        st.toast("Scan triggered — the agent will pick it up within seconds.", icon="🚀")
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Equity", f"${equity:.2f}")
     col2.metric("Cash", f"${bankroll:.2f}")

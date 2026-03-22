@@ -59,6 +59,8 @@ _STATS_ELIGIBLE_EVENT_TYPES = {_EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL}
 
 # Halts all new trade execution when this file exists.
 _KILL_SWITCH_PATH = Path("state/kill_switch.txt")
+# Dashboard can drop this file to trigger an immediate scan cycle.
+_TRIGGER_SCAN_PATH = Path("state/trigger_scan")
 
 
 # ---------------------------------------------------------------------------
@@ -550,6 +552,11 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
 
     while not stop:
+        # Check for a manual trigger from the dashboard
+        if _TRIGGER_SCAN_PATH.exists():
+            _TRIGGER_SCAN_PATH.unlink(missing_ok=True)
+            logger.info("Manual scan triggered via dashboard.")
+            scan_cycle(state_manager=state_manager, broker=broker)
         time.sleep(1)
 
     logger.info("Shutting down scheduler…")
