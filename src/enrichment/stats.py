@@ -179,6 +179,16 @@ def _fd_build_team_index() -> None:
     logger.info("football-data.org team index built: %d entries", len(_team_id_cache))
 
 
+def get_fd_team_index() -> dict[str, int]:
+    """Return the football-data.org team name → ID index.
+
+    Triggers a one-time build from the API if not yet populated.
+    Keys are lowercase team names (both full and short variants).
+    """
+    _fd_build_team_index()
+    return _team_id_cache
+
+
 def _normalize_for_lookup(name: str) -> str:
     """Normalize a team name for index lookup."""
     n = name.lower().strip()

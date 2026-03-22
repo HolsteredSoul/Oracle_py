@@ -24,6 +24,7 @@ class LLMConfig(BaseModel):
 
     fast_model: str
     deep_model: str
+    perplexity_model: str = "perplexity/sonar"
     daily_cap_usd: float = Field(gt=0)
     downgrade_threshold_pct: float = Field(gt=0, le=1.0)
     use_structured_output: bool = False
@@ -50,26 +51,28 @@ class RiskConfig(BaseModel):
     beta: float = Field(ge=0)
     liquidity_safety_factor: float = Field(gt=0, le=1.0)
     kelly_base_fraction: float = Field(gt=0, le=1.0)
+    kelly_hard_cap: float = Field(default=0.10, gt=0, le=1.0)
+    lay_max_pnl_pct: float = Field(default=0.15, gt=0, le=1.0)
+    paper_max_cost_aud: float = Field(default=100.0, gt=0)
 
 
 class ScannerConfig(BaseModel):
     """Market scanner settings."""
 
     poll_interval_sec: int = Field(gt=0)
-    manifold_min_volume: int = Field(ge=0)
-    manifold_min_prob_range: Tuple[float, float]
+    prob_range: Tuple[float, float]
     betfair_event_types: list[int] = Field(default_factory=list)
     betfair_country_codes: list[str] = Field(default_factory=lambda: ["AU"])
     betfair_hours_ahead: int = Field(default=72, gt=0)
     betfair_max_market_age_hours: int = Field(default=168, ge=0)
 
-    @field_validator("manifold_min_prob_range")
+    @field_validator("prob_range")
     @classmethod
     def validate_prob_range(cls, v: Tuple[float, float]) -> Tuple[float, float]:
         low, high = v
         if not (0.0 <= low < high <= 1.0):
             raise ValueError(
-                f"manifold_min_prob_range must satisfy 0 <= low < high <= 1, got ({low}, {high})"
+                f"prob_range must satisfy 0 <= low < high <= 1, got ({low}, {high})"
             )
         return v
 
@@ -112,7 +115,6 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     newsdata_api_key: str = ""
     x_bearer_token: str = ""
-    manifold_api_key: str = ""
     football_data_api_key: str = ""
     betfair_username: str = ""
     betfair_password: str = ""

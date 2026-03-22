@@ -256,3 +256,43 @@ def format_stats_context(stats: MatchStats) -> str:
         )
 
     return "\n".join(lines)
+
+
+def build_perplexity_query(
+    question: str,
+    runner_name: str = "",
+    market_type: str = "",
+    home_team: str = "",
+    away_team: str = "",
+) -> str:
+    """Build a focused web search query for Perplexity Sonar.
+
+    Used as Tier 2 enrichment for markets that already show edge.
+    Asks Perplexity to find recent, specific match/event information
+    that could affect the outcome.
+
+    Returns:
+        Prompt string to pass to call_perplexity().
+    """
+    # Build a focused context line
+    teams_ctx = ""
+    if home_team and away_team:
+        teams_ctx = f"{home_team} vs {away_team}"
+    elif runner_name:
+        teams_ctx = runner_name
+
+    event_ctx = teams_ctx or question.split(" — ")[0].strip()
+
+    return (
+        f"I need the latest news and analysis for this upcoming sports event: "
+        f"{event_ctx}\n\n"
+        f"Full market: {question}\n\n"
+        f"Search for and summarize:\n"
+        f"1. Team news, injuries, suspensions, lineup changes\n"
+        f"2. Recent form and results (last 3-5 matches)\n"
+        f"3. Head-to-head record if available\n"
+        f"4. Expert predictions or betting market analysis\n"
+        f"5. Any other factors that could significantly affect the outcome\n\n"
+        f"Be specific and factual. Include dates and sources where possible. "
+        f"Focus on information from the last 7 days."
+    )

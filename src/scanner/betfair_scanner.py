@@ -6,13 +6,12 @@ Uses read-only API calls only:
 
 No bets are ever placed by this module.
 
-Public API mirrors src/scanner/manifold.py so main.py can swap scanners
-without changing any pipeline logic:
+Public API:
 
     get_markets()                -> list[dict]
     get_market_detail(market_id) -> dict
 
-Dict shape (same keys as manifold scanner, with Betfair extras):
+Dict shape:
     id            : str   — Betfair market ID (e.g. "1.247542121")
     question      : str   — Market name (includes runner name where applicable)
     runner_name   : str   — Name of the specific runner/selection
@@ -95,8 +94,12 @@ def _get_client() -> betfairlightweight.APIClient:
         try:
             # Lightweight health check — triggers re-auth if session expired.
             _client.betting.list_event_types()
-        except Exception:
-            logger.warning("Betfair session expired — re-authenticating.")
+        except (betfairlightweight.exceptions.APIError,
+                betfairlightweight.exceptions.InvalidResponse) as exc:
+            logger.warning("Betfair session expired (%s) — re-authenticating.", exc)
+            _client = _create_and_login()
+        except Exception as exc:
+            logger.error("Unexpected Betfair error during health check: %s", exc)
             _client = _create_and_login()
     return _client
 
@@ -199,7 +202,7 @@ def get_markets(
         country_codes = ["AU"]
 
     client = _get_client()
-    prob_low, prob_high = settings.scanner.manifold_min_prob_range
+    prob_low, prob_high = settings.scanner.prob_range
 
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(hours=hours_ahead)
@@ -365,9 +368,8 @@ def get_markets(
 def get_market_detail(market_id: str) -> dict:
     """Fetch full detail for a single Betfair market.
 
-    Returns the same dict shape as manifold.get_market_detail() so
-    PaperBroker and the pipeline work unmodified. Includes real back/lay
-    prices and implied probabilities from the live order book.
+    Includes real back/lay prices and implied probabilities from the
+    live order book.
 
     Automatically retries once after re-authentication if the session
     has expired.

@@ -61,7 +61,7 @@ class Trade(BaseModel):
     kelly_f_final: float                             # after apply_oracle_sizing()
     bankroll_before: float
     bankroll_after: float
-    status: Literal["open", "settled"]
+    status: Literal["open", "settled", "cancelled"]
     # Populated on settlement:
     exit_price: Optional[float] = None
     pnl: Optional[float] = None                     # realised P&L in paper AUD

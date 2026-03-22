@@ -2,10 +2,18 @@
 
 Public API:
     call_llm(prompt, tier="fast") -> dict | None
+    call_perplexity(prompt) -> str | None
 
 Tier routing:
-    "fast"  -> config.llm.fast_model   (80% of calls, cheap)
-    "deep"  -> config.llm.deep_model   (triggered analysis only)
+    "fast"  -> config.llm.fast_model        (light scan, cheap)
+    "deep"  -> config.llm.deep_model        (triggered deep analysis)
+    perplexity -> config.llm.perplexity_model  (grounded web search, edge candidates only)
+
+Estimated daily costs (15 markets/cycle, 48 cycles/day):
+    Gemini Flash Lite (fast):  ~$0.01/day
+    Perplexity Sonar (5 edge): ~$1.40/day ($0.005 search + $0.001 tokens per call)
+    Claude Sonnet (deep):      ~$0.50/day (when triggered)
+    Total:                     ~$2/day (well within $5 cap)
 
 Cost tracking:
     Daily spend is persisted to state/llm_spend.json.
@@ -239,3 +247,58 @@ def call_llm(
     except json.JSONDecodeError:
         logger.error("LLM returned non-JSON content: %s", content[:300])
         return None
+
+
+# ---------------------------------------------------------------------------
+# Perplexity Sonar — grounded web search for edge candidates (Tier 2)
+# ---------------------------------------------------------------------------
+
+def call_perplexity(prompt: str) -> str | None:
+    """Call Perplexity Sonar via OpenRouter for grounded web search.
+
+    Returns the raw text response (not JSON). Perplexity includes web search
+    results and citations in its response. Cost is tracked against the daily cap.
+
+    Returns None if API key missing, daily cap hit, or any error.
+    """
+    if not settings.openrouter_api_key:
+        return None
+
+    spend = _get_today_spend()
+    if spend >= settings.llm.daily_cap_usd:
+        logger.debug("Daily cap hit; skipping Perplexity call.")
+        return None
+
+    model = settings.llm.perplexity_model
+    headers = {
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/HolsteredSoul/Oracle_py",
+    }
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    try:
+        with httpx.Client(timeout=_TIMEOUT) as client:
+            response = client.post(_OPENROUTER_URL, json=payload, headers=headers)
+            response.raise_for_status()
+    except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+        logger.warning("Perplexity call failed: %s", exc)
+        return None
+
+    data = response.json()
+    cost = (data.get("usage") or {}).get("cost") or 0.0
+    if cost:
+        _add_spend(cost)
+        logger.debug("Perplexity cost: $%.6f | daily total: $%.4f", cost, _get_today_spend())
+
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError):
+        logger.error("Unexpected Perplexity response: %s", str(data)[:300])
+        return None
+
+    logger.info("Perplexity enrichment: %d chars", len(content))
+    return content

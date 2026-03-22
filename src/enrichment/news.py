@@ -116,12 +116,12 @@ def get_news_summary(query: str, max_articles: int = 5) -> str:
     summary = ""
 
     # --- Primary: NewsData.io ---
-    if settings.newsdata_api_key:
+    if settings.newsdata_api_key and newsdata_budget_available():
         try:
             summary = _fetch_newsdata(query, max_articles)
         except Exception as exc:  # noqa: BLE001
             logger.warning("NewsData enrichment failed for '%s': %s", query[:60], exc)
-    else:
+    elif not settings.newsdata_api_key:
         logger.debug("No NewsData API key configured; skipping primary news source.")
 
     # --- Fallback: Google News RSS ---
@@ -133,6 +133,18 @@ def get_news_summary(query: str, max_articles: int = 5) -> str:
 
     _cache[query] = (time.monotonic(), summary)
     return summary
+
+
+def newsdata_budget_available() -> bool:
+    """Check if NewsData has remaining budget this minute without sleeping.
+
+    Call before entering the per-market pipeline to decide whether to attempt
+    NewsData at all.  Avoids the 429 cascade where every market past the limit
+    fails and falls back to Google News RSS.
+    """
+    now = time.monotonic()
+    active = [t for t in _newsdata_calls if now - t < 60.0]
+    return len(active) < _NEWSDATA_MAX_PER_MIN
 
 
 def _newsdata_rate_limit() -> None:

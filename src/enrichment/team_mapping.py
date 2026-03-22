@@ -5,10 +5,13 @@ Football-data.org uses "Sydney FC", "Manchester United FC", "Western Sydney Wand
 Squiggle uses short AFL names like "Sydney", "Collingwood".
 
 Strategy:
-  1. Check hard-coded alias dict (covers known mismatches)
-  2. Normalize and fuzzy-match via difflib.SequenceMatcher
-  3. Cache successful mappings permanently
-  4. Return None on no confident match — caller falls back to mid_price
+  1. Check runtime cache (permanent per session)
+  2. AFL: hardcoded aliases (Squiggle has no dynamic index)
+  3. Football: resolve against the football-data.org team index (316+ teams
+     with full + short names), built dynamically from the API on first use.
+     Falls back to fuzzy matching against the index keys.
+  4. Tiny override dict for proven Betfair naming quirks only.
+  5. Return None on no confident match — caller falls back to mid_price
 """
 
 from __future__ import annotations
@@ -18,76 +21,21 @@ from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
-_FUZZY_THRESHOLD = 0.75
+_FUZZY_THRESHOLD = 0.65
 
 # ---------------------------------------------------------------------------
-# Hard-coded aliases: Betfair name (lowercase) -> canonical stats API name
+# Betfair-specific overrides — ONLY for names that the football-data.org
+# index cannot resolve even with fuzzy matching.  Keep this < 10 entries.
+# Add entries here only when proven needed from production logs.
 # ---------------------------------------------------------------------------
 
-_FOOTBALL_ALIASES: dict[str, str] = {
-    # A-League
-    "western sydney": "Western Sydney Wanderers FC",
-    "western sydney wanderers": "Western Sydney Wanderers FC",
-    "melbourne city": "Melbourne City FC",
-    "melbourne victory": "Melbourne Victory FC",
-    "sydney fc": "Sydney FC",
-    "newcastle jets": "Newcastle Jets FC",
-    "perth glory": "Perth Glory FC",
-    "central coast": "Central Coast Mariners FC",
-    "central coast mariners": "Central Coast Mariners FC",
-    "wellington phoenix": "Wellington Phoenix FC",
-    "macarthur fc": "Macarthur FC",
-    "macarthur": "Macarthur FC",
-    "brisbane roar": "Brisbane Roar FC",
-    "adelaide united": "Adelaide United FC",
-    "auckland fc": "Auckland FC",
-    # EPL
-    "man utd": "Manchester United FC",
-    "manchester utd": "Manchester United FC",
-    "man city": "Manchester City FC",
-    "manchester city": "Manchester City FC",
-    "spurs": "Tottenham Hotspur FC",
-    "tottenham": "Tottenham Hotspur FC",
-    "wolves": "Wolverhampton Wanderers FC",
-    "wolverhampton": "Wolverhampton Wanderers FC",
-    "newcastle": "Newcastle United FC",
-    "newcastle utd": "Newcastle United FC",
-    "west ham": "West Ham United FC",
-    "brighton": "Brighton & Hove Albion FC",
+_FOOTBALL_OVERRIDES: dict[str, str] = {
     "nott'm forest": "Nottingham Forest FC",
-    "nottingham forest": "Nottingham Forest FC",
-    "leicester": "Leicester City FC",
-    "ipswich": "Ipswich Town FC",
-    # Bundesliga
-    "bayern": "FC Bayern München",
-    "bayern munich": "FC Bayern München",
-    "dortmund": "Borussia Dortmund",
-    "borussia dortmund": "Borussia Dortmund",
-    "leverkusen": "Bayer 04 Leverkusen",
-    "bayer leverkusen": "Bayer 04 Leverkusen",
-    "rb leipzig": "RB Leipzig",
-    "leipzig": "RB Leipzig",
-    # La Liga
-    "atletico madrid": "Club Atlético de Madrid",
-    "atletico": "Club Atlético de Madrid",
-    "real madrid": "Real Madrid CF",
-    "barcelona": "FC Barcelona",
-    "barca": "FC Barcelona",
-    # Serie A
-    "ac milan": "AC Milan",
-    "inter": "FC Internazionale Milano",
-    "inter milan": "FC Internazionale Milano",
-    "juventus": "Juventus FC",
-    "napoli": "SSC Napoli",
-    "roma": "AS Roma",
-    "lazio": "SS Lazio",
-    # Ligue 1
-    "psg": "Paris Saint-Germain FC",
-    "paris saint-germain": "Paris Saint-Germain FC",
-    "marseille": "Olympique de Marseille",
-    "lyon": "Olympique Lyonnais",
+    "spurs": "Tottenham Hotspur FC",
+    "wolves": "Wolverhampton Wanderers FC",
 }
 
+# AFL aliases — Squiggle API has no dynamic team index, so these stay hardcoded.
 _AFL_ALIASES: dict[str, str] = {
     "sydney swans": "Sydney",
     "sydney": "Sydney",
@@ -129,18 +77,30 @@ _AFL_ALIASES: dict[str, str] = {
     "st kilda saints": "St Kilda",
 }
 
-# Runtime cache for successful fuzzy matches: (betfair_name_lower, sport) -> canonical
+# Runtime cache for successful matches: (betfair_name_lower, sport) -> canonical
 _resolved_cache: dict[tuple[str, str], str] = {}
 
 
 def _normalize(name: str) -> str:
-    """Normalize a team name for fuzzy comparison."""
+    """Normalize a team name for comparison."""
     n = name.lower().strip()
-    # Strip common suffixes that vary between sources
     for suffix in (" fc", " afc", " sc"):
         if n.endswith(suffix):
             n = n[: -len(suffix)].strip()
     return n
+
+
+def _get_football_index() -> dict[str, int]:
+    """Lazy-load the football-data.org team index.
+
+    Returns an empty dict if the API is unavailable (non-fatal).
+    """
+    try:
+        from src.enrichment.stats import get_fd_team_index
+        return get_fd_team_index()
+    except Exception as exc:
+        logger.debug("Could not load football-data.org team index: %s", exc)
+        return {}
 
 
 def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
@@ -155,14 +115,80 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
     if cache_key in _resolved_cache:
         return _resolved_cache[cache_key]
 
-    # 2. Check hard-coded aliases
-    aliases = _AFL_ALIASES if sport == "afl" else _FOOTBALL_ALIASES
-    if key_lower in aliases:
-        result = aliases[key_lower]
+    # 2. AFL — hardcoded aliases (no dynamic index available)
+    if sport == "afl":
+        if key_lower in _AFL_ALIASES:
+            result = _AFL_ALIASES[key_lower]
+            _resolved_cache[cache_key] = result
+            return result
+        # Fuzzy match against AFL aliases
+        return _fuzzy_match_aliases(betfair_name, _AFL_ALIASES, cache_key)
+
+    # 3. Football — check overrides first
+    if key_lower in _FOOTBALL_OVERRIDES:
+        result = _FOOTBALL_OVERRIDES[key_lower]
         _resolved_cache[cache_key] = result
         return result
 
-    # 3. Fuzzy match against alias values
+    # 4. Football — resolve against football-data.org team index
+    index = _get_football_index()
+    if not index:
+        logger.warning(
+            "Team mapping failed for %r — football-data.org index unavailable.",
+            betfair_name,
+        )
+        return None
+
+    # 4a. Exact match (lowercase)
+    if key_lower in index:
+        # Recover the canonical casing from the index
+        canonical = _canonical_from_index(key_lower, index)
+        _resolved_cache[cache_key] = canonical
+        return canonical
+
+    # 4b. Normalized match (strip FC/AFC/SC suffixes)
+    normalized = _normalize(betfair_name)
+    for idx_key in index:
+        if _normalize(idx_key) == normalized:
+            canonical = _canonical_from_index(idx_key, index)
+            _resolved_cache[cache_key] = canonical
+            logger.debug(
+                "Normalized match: %r -> %r", betfair_name, canonical,
+            )
+            return canonical
+
+    # 4c. Fuzzy match against all index keys
+    best_score = 0.0
+    best_key: str | None = None
+
+    for idx_key in index:
+        score = SequenceMatcher(None, normalized, _normalize(idx_key)).ratio()
+        if score > best_score:
+            best_score = score
+            best_key = idx_key
+
+    if best_score >= _FUZZY_THRESHOLD and best_key is not None:
+        canonical = _canonical_from_index(best_key, index)
+        _resolved_cache[cache_key] = canonical
+        logger.debug(
+            "Fuzzy-matched %r -> %r (score=%.2f)", betfair_name, canonical, best_score,
+        )
+        return canonical
+
+    logger.warning(
+        "Team mapping failed for %r (sport=%s, best_score=%.2f) "
+        "— falling back to mid_price.",
+        betfair_name, sport, best_score,
+    )
+    return None
+
+
+def _fuzzy_match_aliases(
+    betfair_name: str,
+    aliases: dict[str, str],
+    cache_key: tuple[str, str],
+) -> str | None:
+    """Fuzzy match against an alias dict. Used for AFL."""
     normalized = _normalize(betfair_name)
     best_score = 0.0
     best_match: str | None = None
@@ -176,16 +202,29 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
     if best_score >= _FUZZY_THRESHOLD and best_match is not None:
         _resolved_cache[cache_key] = best_match
         logger.debug(
-            "Fuzzy-matched Betfair name %r -> %r (score=%.2f)",
+            "Fuzzy-matched %r -> %r (score=%.2f)",
             betfair_name, best_match, best_score,
         )
         return best_match
 
     logger.warning(
-        "Team mapping failed for %r (sport=%s, best_score=%.2f) — falling back to mid_price.",
-        betfair_name, sport, best_score,
+        "Team mapping failed for %r (sport=afl, best_score=%.2f) "
+        "— falling back to mid_price.",
+        betfair_name, best_score,
     )
     return None
+
+
+def _canonical_from_index(key_lower: str, index: dict[str, int]) -> str:
+    """Recover proper-cased canonical name from a lowercase index key.
+
+    The index stores lowercase keys. We capitalize the first letter of each
+    word to approximate the original casing. For exact results, the caller
+    can look up the team ID and use the API's canonical name directly.
+    """
+    # Title-case is a reasonable approximation; the stats API will do
+    # its own resolution from this canonical name → team ID.
+    return key_lower.title() if key_lower in index else key_lower
 
 
 def parse_teams_from_event(event_name: str) -> tuple[str, str] | None:

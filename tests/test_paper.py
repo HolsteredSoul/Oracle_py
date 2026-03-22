@@ -30,6 +30,8 @@ def cfg() -> MagicMock:
     mock = MagicMock()
     mock.risk.liquidity_safety_factor = 0.70
     mock.risk.commission_pct = 0.05
+    mock.risk.lay_max_pnl_pct = 0.15
+    mock.risk.paper_max_cost_aud = 100.0
     return mock
 
 
@@ -374,53 +376,3 @@ class TestSettlePosition:
         assert state.bankroll == pytest.approx(bankroll_pre + liability_abs + expected_pnl, rel=1e-4)
 
 
-# ---------------------------------------------------------------------------
-# check_and_settle_positions
-# ---------------------------------------------------------------------------
-
-class TestCheckAndSettlePositions:
-    def test_no_settlement_when_not_resolved(self, broker, fresh_state):
-        """isResolved=False → state unchanged."""
-        state, _ = _execute_back(broker, fresh_state, market_id="mkt-1")
-        original_bankroll = state.bankroll
-
-        with patch(
-            "src.execution.paper.get_market_detail",
-            return_value={"isResolved": False, "probability": 0.50},
-        ):
-            state = broker.check_and_settle_positions(state)
-
-        assert state.bankroll == pytest.approx(original_bankroll)
-        assert "mkt-1" in state.positions
-
-    def test_settlement_triggered_when_resolved(self, broker, fresh_state):
-        """isResolved=True + resolution=YES → position closed, bankroll updated."""
-        state, _ = _execute_back(broker, fresh_state, market_id="mkt-1", f_final=0.05,
-                                  fill_price=0.50, available_liquidity=100_000.0)
-        pre_bankroll = state.bankroll
-
-        with patch(
-            "src.execution.paper.get_market_detail",
-            return_value={"isResolved": True, "resolution": "YES", "probability": 1.0},
-        ):
-            state = broker.check_and_settle_positions(state)
-
-        assert "mkt-1" not in state.positions
-        assert state.bankroll != pytest.approx(pre_bankroll)
-
-    def test_no_positions_returns_state_unchanged(self, broker, fresh_state):
-        state = broker.check_and_settle_positions(fresh_state)
-        assert state.bankroll == pytest.approx(DEFAULT_BANKROLL)
-
-    def test_detail_fetch_failure_does_not_crash(self, broker, fresh_state):
-        """A network error fetching position detail should log a warning, not raise."""
-        state, _ = _execute_back(broker, fresh_state, market_id="mkt-1")
-
-        with patch(
-            "src.execution.paper.get_market_detail",
-            side_effect=RuntimeError("Network error"),
-        ):
-            state = broker.check_and_settle_positions(state)   # must not raise
-
-        # Position should still be open (fetch failed, no settlement)
-        assert "mkt-1" in state.positions

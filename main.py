@@ -1,7 +1,7 @@
 """Oracle Python Agent — Entry point.
 
 Usage:
-    python main.py           # paper trading (default)
+    python main.py           # paper trading on Betfair AU data (default)
     python main.py --live    # raises NotImplementedError (Phase 6 only)
 
 Kill switch:
@@ -16,7 +16,7 @@ import logging
 import random
 import signal
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -27,13 +27,17 @@ from src.enrichment.stats import get_match_stats
 from src.enrichment.trigger import should_trigger_deep
 from src.enrichment.x_sentiment import get_x_summary
 from src.execution.paper import PaperBroker
-from src.llm.client import call_llm
+from src.llm.client import call_llm, call_perplexity
 from src.llm.models import DeepTriggerResponse, LightScanResponse, light_scan_schema, deep_trigger_schema
-from src.llm.prompts import build_deep_trigger_prompt, build_light_scan_prompt, format_stats_context
+from src.llm.prompts import (
+    build_deep_trigger_prompt,
+    build_light_scan_prompt,
+    build_perplexity_query,
+    format_stats_context,
+)
 from src.logging_setup import configure_logging
 from src.risk.manager import check_risk_gates
 from src.scanner import betfair_scanner
-from src.scanner.manifold import get_market_detail, get_markets
 from src.storage.state_manager import OracleState, StateManager
 from src.strategy.bayesian import update_probability
 from src.strategy.edge import executable_edge
@@ -50,6 +54,8 @@ _MAX_MARKETS_PER_CYCLE = 15
 # Betfair event type IDs for sport detection
 _EVENT_TYPE_SOCCER = "1"
 _EVENT_TYPE_AFL = "61"
+# Event types that have team-vs-team stats available
+_STATS_ELIGIBLE_EVENT_TYPES = {_EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL}
 
 # Halts all new trade execution when this file exists.
 _KILL_SWITCH_PATH = Path("state/kill_switch.txt")
@@ -67,15 +73,6 @@ def _parse_args() -> argparse.Namespace:
         default=False,
         help="Enable live Betfair execution (Phase 6 only — currently disabled).",
     )
-    parser.add_argument(
-        "--betfair-paper",
-        action="store_true",
-        default=False,
-        help=(
-            "Paper trading using real Betfair AU market data. "
-            "No bets are placed — uses PaperBroker with Betfair prices."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -90,8 +87,6 @@ def _analyse_and_trade(
     broker: PaperBroker,
     exposure: float,
     drawdown: float,
-    mode: str,
-    get_detail_fn=get_market_detail,
 ) -> None:
     """Run the full intelligence + strategy + execution pipeline for one market."""
     market_id = market["id"]
@@ -109,7 +104,7 @@ def _analyse_and_trade(
     stats_context = ""
     match_stats = None
 
-    if home_team and away_team:
+    if home_team and away_team and event_type_id in _STATS_ELIGIBLE_EVENT_TYPES:
         sport = "afl" if event_type_id == _EVENT_TYPE_AFL else "football"
         match_stats = get_match_stats(home_team, away_team, sport)
         if match_stats is not None:
@@ -206,7 +201,7 @@ def _analyse_and_trade(
 
     # --- Market detail for accurate spread + liquidity ---
     try:
-        detail = get_detail_fn(market_id)
+        detail = betfair_scanner.get_market_detail(market_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to fetch market detail for %s: %s", market_id, exc)
         return
@@ -245,6 +240,69 @@ def _analyse_and_trade(
         )
         return
 
+    # --- Tier 2: Perplexity-enriched deep re-scan for edge candidates ---
+    perplexity_query = build_perplexity_query(
+        question, runner_name=runner_name, market_type=market_type,
+        home_team=home_team, away_team=away_team,
+    )
+    perplexity_news = call_perplexity(perplexity_query)
+    if perplexity_news:
+        # Re-run deep LLM with grounded web search context
+        enriched_news = f"{news}\n\n--- Perplexity web search ---\n{perplexity_news}"
+        deep_prompt = build_deep_trigger_prompt(
+            question, mid_price, enriched_news, x_data,
+            runner_name=runner_name, market_type=market_type,
+            stats_context=stats_context, model_probability=p_model,
+        )
+        deep_raw = call_llm(deep_prompt, tier="deep", response_schema=deep_trigger_schema())
+        if deep_raw is not None:
+            try:
+                deep_resp = DeepTriggerResponse(**deep_raw)
+                logger.info(
+                    "Perplexity-enriched deep scan | market=%s delta=%.3f "
+                    "uncertainty=%.3f factors=%s",
+                    market_id, deep_resp.sentiment_delta,
+                    deep_resp.uncertainty_penalty, deep_resp.key_factors,
+                )
+                # Override sentiment with the better-informed deep analysis
+                sentiment_delta = deep_resp.sentiment_delta
+                uncertainty_penalty = deep_resp.uncertainty_penalty
+
+                # Re-compute Bayesian update and edge with new delta
+                prior_p = state.priors.get(market_id, default_prior)
+                p_fair = update_probability(prior_p, sentiment_delta, settings.risk.beta)
+
+                divergence = abs(p_fair - mid_price)
+                if divergence > 0.40:
+                    logger.warning(
+                        "Extreme divergence after Perplexity enrichment | "
+                        "market=%s p_fair=%.3f mid=%.3f — skipping.",
+                        market_id, p_fair, mid_price,
+                    )
+                    return
+
+                back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
+                lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")
+
+                if back_edge >= margin_min and back_edge >= lay_edge:
+                    direction = "back"
+                    edge = back_edge
+                    q_market = p_ask
+                elif lay_edge >= margin_min:
+                    direction = "lay"
+                    edge = lay_edge
+                    q_market = p_bid
+                else:
+                    logger.info(
+                        "Edge lost after Perplexity re-scan | market=%s back=%.3f lay=%.3f",
+                        market_id, back_edge, lay_edge,
+                    )
+                    return
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Perplexity deep parse error for %s: %s", market_id, exc,
+                )
+
     # --- Kelly sizing ---
     conf_score = PaperBroker.derive_conf_score(uncertainty_penalty)
     f_star = commission_aware_kelly(
@@ -262,36 +320,31 @@ def _analyse_and_trade(
         logger.info("Risk gate blocked %s: %s", market_id, reason)
         return
 
-    # --- Execution ---
-    if mode in ("paper", "betfair-paper"):
-        fill_price = p_ask if direction == "back" else p_bid
-        mst_iso = market_start_time.isoformat() if market_start_time else None
-        state, trade = broker.execute(
-            state=state,
-            market_id=market_id,
-            question=question[:120],
-            direction=direction,
-            f_final=f_final,
-            fill_price=fill_price,
-            edge=edge,
-            p_fair=p_fair,
-            kelly_f_star=f_star,
-            kelly_f_final=f_final,
-            conf_score=conf_score,
-            uncertainty_penalty=uncertainty_penalty,
-            available_liquidity=available_liquidity,
-            market_start_time=mst_iso,
-        )
-        if trade is not None:
-            state.priors[market_id] = p_fair
-            state_manager.save(state)
-            logger.info(
-                "Trade logged | market=%s dir=%s filled=%.4f price=%.3f edge=%.3f",
-                market_id, direction, trade.filled_size, trade.fill_price, edge,
-            )
-    else:
-        raise NotImplementedError(
-            "--live mode is reserved for Phase 6. Remove --live for paper trading."
+    # --- Execution (paper) ---
+    fill_price = p_ask if direction == "back" else p_bid
+    mst_iso = market_start_time.isoformat() if market_start_time else None
+    state, trade = broker.execute(
+        state=state,
+        market_id=market_id,
+        question=question[:120],
+        direction=direction,
+        f_final=f_final,
+        fill_price=fill_price,
+        edge=edge,
+        p_fair=p_fair,
+        kelly_f_star=f_star,
+        kelly_f_final=f_final,
+        conf_score=conf_score,
+        uncertainty_penalty=uncertainty_penalty,
+        available_liquidity=available_liquidity,
+        market_start_time=mst_iso,
+    )
+    if trade is not None:
+        state.priors[market_id] = p_fair
+        state_manager.save(state)
+        logger.info(
+            "Trade logged | market=%s dir=%s filled=%.4f price=%.3f edge=%.3f",
+            market_id, direction, trade.filled_size, trade.fill_price, edge,
         )
 
 
@@ -306,11 +359,36 @@ def _settle_betfair_positions(
 ) -> OracleState:
     """Settle open positions using Betfair market data.
 
-    Equivalent to PaperBroker.check_and_settle_positions() but calls
-    betfair_scanner.get_market_detail() instead of the Manifold equivalent.
-    PaperBroker is left unchanged — settlement is driven from here.
+    Auto-cancels positions whose market_start_time has aged beyond the
+    configured max_market_age_hours (catches season-long outrights).
     """
+    max_age_h = settings.scanner.betfair_max_market_age_hours
+    now = datetime.now(timezone.utc)
+
     for market_id in list(state.positions.keys()):
+        pos = state.positions[market_id]
+
+        # Auto-cancel positions in markets that have aged past the cutoff.
+        if max_age_h > 0 and pos.market_start_time:
+            try:
+                mst_dt = datetime.fromisoformat(pos.market_start_time)
+                age_hours = (now - mst_dt).total_seconds() / 3600
+                if age_hours > max_age_h:
+                    logger.info(
+                        "Auto-cancelling aged position %s (age=%.0fh, max=%dh)",
+                        market_id, age_hours, max_age_h,
+                    )
+                    try:
+                        state, _ = broker.cancel_position(
+                            state, market_id,
+                            reason=f"market aged out ({age_hours:.0f}h > {max_age_h}h)",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error("Auto-cancel failed for %s: %s", market_id, exc)
+                    continue
+            except (ValueError, TypeError):
+                pass  # unparseable market_start_time — fall through to normal check
+
         try:
             detail = betfair_scanner.get_market_detail(market_id)
         except Exception as exc:  # noqa: BLE001
@@ -335,9 +413,6 @@ def _settle_betfair_positions(
         if detail.get("isResolved"):
             resolution = detail.get("resolution", "MKT")
             res_prob = detail.get("probability", 0.5)
-            # The closing_price is the last_seen_price captured in a previous cycle
-            # (before the market resolved). May be None for positions opened before
-            # this feature was added — that's fine, CLV will be None for those trades.
             closing_price = state.positions[market_id].last_seen_price
             try:
                 state, _ = broker.settle_position(
@@ -355,10 +430,8 @@ def _settle_betfair_positions(
 def scan_cycle(
     state_manager: StateManager,
     broker: PaperBroker,
-    mode: str,
 ) -> None:
     """Run one full scan cycle with settlement checks and paper execution."""
-    is_betfair = mode == "betfair-paper"
 
     try:
         # Kill switch — scan only, no new trades
@@ -368,30 +441,20 @@ def scan_cycle(
 
         # Load state and settle any resolved positions
         state = state_manager.load()
-        if is_betfair:
-            state = _settle_betfair_positions(state, broker, state_manager)
-        else:
-            state = broker.check_and_settle_positions(state)
+        state = _settle_betfair_positions(state, broker, state_manager)
 
         # Compute risk metrics once at cycle start
         exposure = state_manager.current_exposure(state)
         drawdown = state_manager.drawdown_pct(state)
 
-        if is_betfair:
-            markets = betfair_scanner.get_markets(
-                country_codes=settings.scanner.betfair_country_codes,
-                hours_ahead=settings.scanner.betfair_hours_ahead,
-            )
-        else:
-            markets = get_markets()
-        logger.info("Scan cycle started (%s), found %d markets", mode, len(markets))
+        markets = betfair_scanner.get_markets(
+            country_codes=settings.scanner.betfair_country_codes,
+            hours_ahead=settings.scanner.betfair_hours_ahead,
+        )
+        logger.info("Scan cycle started, found %d markets", len(markets))
 
         # Randomize order so we don't re-scan the same subset every cycle.
-        # betfair_scanner already sorts by market type priority, so shuffle within
-        # type-groups by using a stable approach: shuffle then re-sort by priority tier.
         random.shuffle(markets)
-
-        get_detail_fn = betfair_scanner.get_market_detail if is_betfair else get_market_detail
 
         for market in markets[:_MAX_MARKETS_PER_CYCLE]:
             # Skip markets where we already hold a position
@@ -407,8 +470,6 @@ def scan_cycle(
                     broker=broker,
                     exposure=exposure,
                     drawdown=drawdown,
-                    mode=mode,
-                    get_detail_fn=get_detail_fn,
                 )
                 # Reload after potential trade to get updated exposure/drawdown
                 state = state_manager.load()
@@ -421,6 +482,17 @@ def scan_cycle(
         # Always persist state so the dashboard shows current bankroll/positions
         # even during cycles where no edge was found and no trade was placed.
         state_manager.save(state)
+
+        # Per-cycle summary
+        open_count = len(state.positions)
+        settled_count = sum(1 for t in state.trade_history if t.status == "settled")
+        total_pnl = sum(t.pnl for t in state.trade_history if t.status == "settled" and t.pnl is not None)
+        logger.info(
+            "Cycle summary | markets=%d positions=%d settled=%d "
+            "bankroll=%.2f pnl=%.2f exposure=%.2f drawdown=%.2f",
+            len(markets), open_count, settled_count,
+            state.bankroll, total_pnl, exposure, drawdown,
+        )
 
     except Exception as exc:  # noqa: BLE001
         logger.error("Scan cycle failed: %s", exc)
@@ -438,7 +510,6 @@ def main() -> None:
             "--live mode is reserved for Phase 6. "
             "Remove --live to run paper trading."
         )
-    mode = "betfair-paper" if args.betfair_paper else "paper"
 
     state_manager = StateManager()
     broker = PaperBroker(state_manager, settings)
@@ -452,15 +523,12 @@ def main() -> None:
         id="scan",
         max_instances=1,    # prevents overlapping cycles during slow scans
         coalesce=True,      # if a cycle was missed, run once not multiple times
-        kwargs={"state_manager": state_manager, "broker": broker, "mode": mode},
+        kwargs={"state_manager": state_manager, "broker": broker},
         next_run_time=datetime.now(),
     )
     scheduler.start()
-    data_source = "Betfair AU (paper)" if mode == "betfair-paper" else "Manifold (paper)"
     logger.info(
-        "Oracle agent started | mode=%s data=%s interval=%d min | Ctrl+C to stop.",
-        mode,
-        data_source,
+        "Oracle agent started | data=Betfair AU (paper) interval=%d min | Ctrl+C to stop.",
         interval_min,
     )
 

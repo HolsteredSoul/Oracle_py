@@ -3,8 +3,8 @@
 All Betfair API calls are mocked — no network required.
 
 Tests verify:
-1. get_markets() returns dicts with the same keys as manifold.get_markets()
-2. get_market_detail() returns a dict with the same keys as manifold.get_market_detail()
+1. get_markets() returns dicts with expected keys
+2. get_market_detail() returns a dict with expected keys
 3. probability = 1 / best_back_price
 4. totalLiquidity = sum of back + lay sizes
 5. isResolved is True for CLOSED/SETTLED status, False otherwise
@@ -81,7 +81,7 @@ def mock_client():
 
 class TestGetMarkets:
     def test_returns_correct_keys(self, mock_client):
-        """get_markets() dicts must contain the same keys as manifold.get_markets()."""
+        """get_markets() dicts must contain expected keys."""
         runner = _make_runner(
             back_prices=[_make_price_size(2.0, 100.0)],
             lay_prices=[_make_price_size(2.1, 50.0)],
@@ -97,7 +97,7 @@ class TestGetMarkets:
 
         assert len(markets) == 1
         m = markets[0]
-        # These are the keys manifold.get_markets() produces + extras used by paper.py
+        # Expected keys used by the pipeline
         for key in ("id", "question", "probability", "volume", "url",
                     "totalLiquidity", "isResolved"):
             assert key in m, f"Missing key: {key!r}"
@@ -189,7 +189,7 @@ class TestGetMarkets:
 
 class TestGetMarketDetail:
     def test_returns_correct_keys(self, mock_client):
-        """get_market_detail() must return the same keys manifold.get_market_detail() does."""
+        """get_market_detail() must return expected keys."""
         runner = _make_runner(
             back_prices=[_make_price_size(4.0, 200.0)],
             lay_prices=[_make_price_size(4.2, 100.0)],
@@ -280,38 +280,3 @@ class TestGetMarketDetail:
         assert detail["id"] == "1.600"
 
 
-# ---------------------------------------------------------------------------
-# Shape compatibility: manifold vs betfair
-# ---------------------------------------------------------------------------
-
-class TestShapeCompatibility:
-    """Verify that betfair_scanner output is a superset of manifold output keys."""
-
-    MANIFOLD_GET_MARKETS_KEYS = {"id", "question", "probability", "volume", "url"}
-    MANIFOLD_DETAIL_KEYS = {
-        "id", "question", "probability", "volume", "url",
-        "totalLiquidity", "isResolved",
-    }
-
-    def test_get_markets_is_superset_of_manifold(self, mock_client):
-        runner = _make_runner(back_prices=[_make_price_size(3.0, 100.0)])
-        book = _make_book("1.700", runners=[runner])
-        mock_client.betting.list_market_catalogue.return_value = [_make_catalogue("1.700")]
-        mock_client.betting.list_market_book.return_value = [book]
-
-        from src.scanner.betfair_scanner import get_markets
-        markets = get_markets()
-
-        assert len(markets) == 1
-        assert self.MANIFOLD_GET_MARKETS_KEYS.issubset(markets[0].keys())
-
-    def test_get_market_detail_is_superset_of_manifold(self, mock_client):
-        runner = _make_runner(back_prices=[_make_price_size(3.0, 100.0)])
-        book = _make_book("1.800", runners=[runner])
-        mock_client.betting.list_market_catalogue.return_value = [_make_catalogue("1.800")]
-        mock_client.betting.list_market_book.return_value = [book]
-
-        from src.scanner.betfair_scanner import get_market_detail
-        detail = get_market_detail("1.800")
-
-        assert self.MANIFOLD_DETAIL_KEYS.issubset(detail.keys())

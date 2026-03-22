@@ -13,7 +13,7 @@ from typing import Literal
 
 logger = logging.getLogger(__name__)
 
-_HARD_CAP = 0.10  # Maximum fraction of bankroll risked on any single trade (paper phase)
+_DEFAULT_HARD_CAP = 0.10  # Fallback if config not passed; overridden by risk.kelly_hard_cap
 
 
 def commission_aware_kelly(
@@ -82,8 +82,9 @@ def apply_oracle_sizing(
         if drawdown_pct >= risk.drawdown_throttle_pct
         else 1.0
     )
+    hard_cap = getattr(risk, "kelly_hard_cap", _DEFAULT_HARD_CAP)
     f_final = k * f_star * lambda_conf * lambda_dd
-    return min(f_final, _HARD_CAP)
+    return min(f_final, hard_cap)
 
 
 def translate_to_betfair(

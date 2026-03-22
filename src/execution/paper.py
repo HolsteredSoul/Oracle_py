@@ -1,6 +1,6 @@
 """Paper trading execution engine.
 
-Simulates Manifold prediction-market fills without touching real money.
+Simulates prediction-market fills without touching real money.
 
 Public API:
     PaperBroker(state_manager, settings)
@@ -8,7 +8,7 @@ Public API:
         .derive_conf_score(uncertainty)      -> float
         .execute(state, ...)                 -> (OracleState, Trade | None)
         .settle_position(state, ...)         -> (OracleState, Trade)
-        .check_and_settle_positions(state)   -> OracleState
+        .cancel_position(state, ...)         -> (OracleState, Trade)
 
 Fill-or-Kill logic:
     requested_abs = f_final * bankroll
@@ -38,13 +38,12 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from src.config import Settings
-from src.scanner.manifold import get_market_detail
 from src.storage.state_manager import OracleState, Position, StateManager, Trade
 
 logger = logging.getLogger(__name__)
 
 _BASE_CONF = 100.0          # conf_score = _BASE_CONF * (1 - uncertainty_penalty)
-_HALF_SPREAD = 0.01         # ±1% approximation of Manifold AMM half-spread
+_HALF_SPREAD = 0.01         # ±1% synthetic half-spread when real prices unavailable
 _PARTIAL_FILL_LOW = 0.60
 _PARTIAL_FILL_HIGH = 0.90
 
@@ -54,7 +53,7 @@ def _utc_now() -> str:
 
 
 class PaperBroker:
-    """Simulated execution engine for paper trading on Manifold Markets."""
+    """Simulated execution engine for paper trading."""
 
     def __init__(self, state_manager: StateManager, settings: Settings) -> None:
         self._sm = state_manager
@@ -68,10 +67,11 @@ class PaperBroker:
     def derive_spread(probability: float) -> tuple[float, float]:
         """Return (p_ask, p_bid) from a market mid probability.
 
-        Applies a fixed ±0.01 half-spread approximation of Manifold's AMM.
+        Applies a fixed ±0.01 synthetic half-spread when real back/lay prices
+        are not available.
 
         Args:
-            probability: Current market probability from get_market_detail().
+            probability: Current market probability.
 
         Returns:
             (p_ask, p_bid) — p_ask is the cost to back YES (higher),
@@ -121,7 +121,7 @@ class PaperBroker:
 
         Args:
             state:               Current OracleState (mutated in-place and returned).
-            market_id:           Manifold market ID.
+            market_id:           Market ID.
             question:            Market question text (truncated to 120 chars).
             direction:           "back" or "lay".
             f_final:             Final Kelly fraction (output of apply_oracle_sizing).
@@ -151,45 +151,49 @@ class PaperBroker:
         # Compute absolute stake and liability
         if direction == "back":
             stake_abs = filled_size * state.bankroll
-            # liability = what we stand to lose if YES doesn't happen (the stake itself)
-            # Betfair-style: liability is stake * (1/price - 1) but for paper Manifold
-            # we simply lose the stake on NO, so liability_abs == stake_abs
+            # For back bets, liability equals stake (we lose the stake on NO)
             liability_abs = stake_abs
         else:  # lay
             liability_abs = filled_size * state.bankroll
             # stake_abs for a lay = what we win if lay succeeds
             denom = (1.0 / fill_price) - 1.0
-            stake_abs = liability_abs / denom if denom > 0 else 0.0
+            if denom <= 0:
+                logger.warning(
+                    "Lay fill_price=%.6f produces zero/negative denom (%.6f) — skipping trade.",
+                    fill_price, denom,
+                )
+                return state, None
+            stake_abs = liability_abs / denom
 
             # Lay stake cap: prevent stake_abs from exceeding max_pnl_pct of
             # bankroll. Without this, laying at extreme odds (e.g. 0.99) produces
             # stake_abs ~100× liability, so one trade can move bankroll by 500%+.
-            _MAX_PNL_PCT = 0.15  # max 15% of bankroll impact per lay trade
-            max_stake = state.bankroll * _MAX_PNL_PCT
+            lay_max_pnl_pct = self._cfg.risk.lay_max_pnl_pct
+            max_stake = state.bankroll * lay_max_pnl_pct
             if stake_abs > max_stake:
                 scale_lay = max_stake / stake_abs
                 logger.info(
                     "Lay stake cap: capping stake_abs from %.2f to %.2f "
                     "(%.0f%% of bankroll)",
-                    stake_abs, max_stake, _MAX_PNL_PCT * 100,
+                    stake_abs, max_stake, lay_max_pnl_pct * 100,
                 )
                 stake_abs *= scale_lay
                 liability_abs *= scale_lay
                 filled_size *= scale_lay
 
         # Hard dollar cap per trade — second line of defence against Kelly oversizing
-        _MAX_PAPER_COST = 100.0
+        max_paper_cost = self._cfg.risk.paper_max_cost_aud
         cost = stake_abs if direction == "back" else liability_abs
-        if cost > _MAX_PAPER_COST:
+        if cost > max_paper_cost:
             logger.warning(
                 "Paper trade cost %.2f exceeds max %.2f — capping.",
-                cost, _MAX_PAPER_COST,
+                cost, max_paper_cost,
             )
-            scale = _MAX_PAPER_COST / cost
+            scale = max_paper_cost / cost
             filled_size *= scale
             stake_abs *= scale
             liability_abs *= scale
-            cost = _MAX_PAPER_COST
+            cost = max_paper_cost
 
         # Insufficient funds guard
         if cost > state.bankroll or cost <= 0:
@@ -242,8 +246,10 @@ class PaperBroker:
         if state.bankroll > state.peak_bankroll:
             state.peak_bankroll = state.bankroll
 
-        state = self._sm.update_position(state, market_id, position)
-        state = self._sm.add_trade(state, trade)
+        # Batch state mutations into a single save to reduce OneDrive lock contention
+        state.positions[market_id] = position
+        state.trade_history.append(trade)
+        self._sm.save(state)
 
         logger.info(
             "Paper fill | market=%s dir=%s filled=%.4f price=%.3f edge=%.3f "
@@ -369,8 +375,9 @@ class PaperBroker:
             )
             settled_trade = state.trade_history[-1]  # fallback — should not happen
 
-        # Remove position
-        state = self._sm.update_position(state, market_id, None)
+        # Remove position and save in one write
+        state.positions.pop(market_id, None)
+        self._sm.save(state)
 
         logger.info(
             "Settled | market=%s resolution=%s pnl=%.2f clv=%s bankroll=%.2f",
@@ -383,40 +390,63 @@ class PaperBroker:
         return state, settled_trade
 
     # ------------------------------------------------------------------
-    # Batch settlement check
+    # Cancellation (escrow refund, no P&L)
     # ------------------------------------------------------------------
 
-    def check_and_settle_positions(self, state: OracleState) -> OracleState:
-        """Check all open positions for resolution and settle any that have closed.
+    def cancel_position(
+        self,
+        state: OracleState,
+        market_id: str,
+        reason: str = "",
+    ) -> tuple[OracleState, Trade]:
+        """Cancel an open position, returning escrowed capital to bankroll.
 
-        Called at the top of each scan cycle before scanning for new trades.
-        Fetches get_market_detail() for each open position market.
+        Used when a market becomes unreachable, is filtered out (e.g. aged-out
+        outrights), or is otherwise no longer tradeable.
 
         Args:
-            state: Current OracleState.
+            state:     Current OracleState.
+            market_id: Market to cancel.
+            reason:    Human-readable reason (logged and stored).
 
         Returns:
-            Updated state (unchanged if no positions resolved this cycle).
+            (updated_state, cancelled_trade)
+
+        Raises:
+            KeyError: If market_id has no open position.
         """
-        for market_id in list(state.positions.keys()):
-            try:
-                detail = get_market_detail(market_id)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to fetch detail for open position %s: %s — skipping settlement check.",
-                    market_id,
-                    exc,
-                )
-                continue
+        position = state.positions[market_id]
+        cost = position.stake_abs if position.direction == "back" else position.liability_abs
+        state.bankroll += cost  # return escrow, zero P&L
 
-            if detail.get("isResolved"):
-                resolution = detail.get("resolution", "MKT")
-                res_prob = detail.get("probability", 0.5)
-                try:
-                    state, _ = self.settle_position(state, market_id, resolution, res_prob)
-                except Exception as exc:
-                    logger.error(
-                        "Settlement failed for %s: %s", market_id, exc
-                    )
+        cancel_ts = _utc_now()
 
-        return state
+        cancelled_trade: Trade | None = None
+        for i, t in enumerate(state.trade_history):
+            if t.trade_id == position.trade_id:
+                updated = t.model_copy(update={
+                    "status": "cancelled",
+                    "exit_timestamp": cancel_ts,
+                    "pnl": 0.0,
+                    "commission_paid": 0.0,
+                })
+                state.trade_history[i] = updated
+                cancelled_trade = updated
+                break
+
+        if cancelled_trade is None:
+            logger.error(
+                "Could not find trade_id=%s in history for market %s",
+                position.trade_id, market_id,
+            )
+            cancelled_trade = state.trade_history[-1]
+
+        state.positions.pop(market_id, None)
+        self._sm.save(state)
+
+        logger.info(
+            "Cancelled | market=%s reason=%s refund=%.2f bankroll=%.2f",
+            market_id, reason or "unspecified", cost, state.bankroll,
+        )
+        return state, cancelled_trade
+

@@ -17,11 +17,13 @@ def make_config(
     kelly_base_fraction=0.50,
     drawdown_throttle_pct=0.20,
     drawdown_throttle_factor=0.50,
+    kelly_hard_cap=0.10,
 ):
     cfg = MagicMock()
     cfg.risk.kelly_base_fraction = kelly_base_fraction
     cfg.risk.drawdown_throttle_pct = drawdown_throttle_pct
     cfg.risk.drawdown_throttle_factor = drawdown_throttle_factor
+    cfg.risk.kelly_hard_cap = kelly_hard_cap
     return cfg
 
 

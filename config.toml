@@ -2,12 +2,13 @@
 # Update model IDs here as new models are released — never hardcode in source
 fast_model = "google/gemini-2.5-flash-lite"
 deep_model = "anthropic/claude-sonnet-4.6"
+perplexity_model = "perplexity/sonar"
 daily_cap_usd = 5.0
 downgrade_threshold_pct = 0.80
 use_structured_output = true
 
 [triggers]
-news_sentiment_delta = 0.28
+news_sentiment_delta = 0.15
 x_momentum = 0.32
 volatility_z = 2.3
 margin_min_paper = 0.030
@@ -22,11 +23,13 @@ commission_pct = 0.05
 beta = 2.00
 liquidity_safety_factor = 0.70
 kelly_base_fraction = 0.50
+kelly_hard_cap = 0.10
+lay_max_pnl_pct = 0.15
+paper_max_cost_aud = 100.0
 
 [scanner]
 poll_interval_sec = 1800
-manifold_min_volume = 500
-manifold_min_prob_range = [0.05, 0.95]
+prob_range = [0.05, 0.95]
 betfair_event_types = [1, 2, 4, 61, 7522, 7524, 7511]
 betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT"]
 betfair_hours_ahead = 72

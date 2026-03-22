@@ -2,7 +2,7 @@
 
 An autonomous Python prediction-market agent that maximizes long-term geometric bankroll growth by identifying and sizing high-conviction trading edges on prediction markets.
 
-> Paper trading on Manifold Markets for safe validation; targeting live execution on Betfair Australia.
+> Paper trading on Betfair Australia for safe validation; targeting live execution on Betfair.
 
 ---
 
@@ -24,22 +24,23 @@ Oracle is an event-driven trading agent built around a core principle: **LLM as 
 ```
 main.py (30-min scan cycle)
     │
-    ├── scanner/manifold.py        — Fetch live Manifold markets (default)
-    ├── scanner/betfair_scanner.py — Fetch live Betfair AU markets (--betfair-paper)
+    ├── scanner/betfair_scanner.py — Fetch live Betfair AU markets
     ├── enrichment/trigger.py      — Decide: light scan or deep trigger?
-    │       ├── enrichment/news.py       — NewsData.io headlines
-    │       └── enrichment/x_sentiment.py — X API v2 tweet search
+    │       ├── enrichment/news.py       — NewsData.io + Google News RSS
+    │       ├── enrichment/x_sentiment.py — X API v2 tweet search
+    │       └── enrichment/stats.py      — Football-data.org + Squiggle stats
     │
     ├── llm/client.py              — OpenRouter wrapper (cost tracking, tier routing)
-    │       ├── llm/prompts.py           — Three JSON-forced prompt templates
+    │       ├── llm/prompts.py           — JSON-forced prompt templates
     │       └── llm/models.py            — Pydantic response validation
     │
     ├── strategy/bayesian.py       — Logit-space probability updater
     ├── strategy/kelly.py          — Commission-aware Kelly + liability translation
     ├── strategy/edge.py           — Executable edge calculation
+    ├── strategy/statistical_model.py — Poisson match prediction model
     │
     ├── risk/manager.py            — Pre-trade gates (exposure cap, confidence floor, drawdown)
-    ├── execution/paper.py         — FOK simulation, partial fills, settlement
+    ├── execution/paper.py         — FOK simulation, partial fills, settlement, cancellation
     └── storage/state_manager.py   — OracleState JSON persistence
 ```
 
@@ -53,8 +54,10 @@ The Streamlit dashboard (`src/dashboard/app.py`) runs as a separate process and 
 
 - Python 3.11+
 - [OpenRouter](https://openrouter.ai) API key (required)
-- NewsData.io API key (optional — enrichment only)
-- X API v2 Bearer token (optional — enrichment only)
+- Betfair account with API access (required)
+- NewsData.io API key (optional — enrichment)
+- Football-data.org API key (optional — statistical model)
+- X API v2 Bearer token (optional — enrichment)
 
 ### Installation
 
@@ -70,24 +73,20 @@ pip install -r requirements.txt
 
 1. Create a `.env` file in the project root:
 
-   **Paper trading on Manifold (minimum required):**
+   **Required:**
    ```
-   OPENROUTER_API_KEY=sk-or-v1-...   # required — all LLM calls route through OpenRouter
-   MANIFOLD_API_KEY=...               # optional — reserved for future authenticated Manifold calls
-   ```
-
-   **Enrichment (optional — agent degrades gracefully without these):**
-   ```
-   NEWSDATA_API_KEY=...               # NewsData.io — enables news headline triggers
-   X_BEARER_TOKEN=...                 # X API v2 — enables tweet momentum triggers
+   OPENROUTER_API_KEY=sk-or-v1-...
+   BETFAIR_USERNAME=...
+   BETFAIR_PASSWORD=...
+   BETFAIR_APP_KEY=...
    ```
 
-   **Betfair paper trading (`--betfair-paper`) and live trading (Phase 6):**
+   **Optional enrichment (agent degrades gracefully without these):**
    ```
-   BETFAIR_USERNAME=...               # Betfair account email
-   BETFAIR_PASSWORD=...               # Betfair account password
-   BETFAIR_APP_KEY=...                # App key from Betfair Developer portal (1.0-DELAY for paper)
-   BETFAIR_CERTS_PATH=...             # Phase 6 only: directory with client-2048.crt and .key
+   NEWSDATA_API_KEY=...
+   FOOTBALL_DATA_API_KEY=...
+   X_BEARER_TOKEN=...
+   BETFAIR_CERTS_PATH=...        # Phase 6 only: directory with client certs
    ```
 
 2. Review `config.toml` — key settings to check before running:
@@ -96,30 +95,24 @@ pip install -r requirements.txt
    daily_cap_usd = 5.0          # Daily LLM spend limit
 
    [triggers]
-   margin_min_paper = 0.025     # Minimum edge threshold for paper trades
+   margin_min_paper = 0.030     # Minimum edge threshold for paper trades
 
    [risk]
    max_exposure = 0.85          # Max fraction of bankroll in open positions
    kelly_base_fraction = 0.50   # Half-Kelly (conservative default)
-
-   [scanner]
-   manifold_min_volume = 500    # Skip illiquid markets below this volume
    ```
 
 ### Running
 
 ```bash
-# Paper trading — Manifold Markets data (default)
-python main.py
-
 # Paper trading — real Betfair AU market data, no bets placed
-python main.py --betfair-paper
+python main.py
 
 # Launch the monitoring dashboard (separate terminal)
 streamlit run src/dashboard/app.py
 ```
 
-`--betfair-paper` uses live Betfair exchange prices and volumes for the full pipeline (probability, spread, liquidity) while keeping `PaperBroker` for all execution and settlement. No bets are ever placed.
+The agent uses live Betfair exchange prices and volumes for the full pipeline (probability, spread, liquidity) while keeping `PaperBroker` for all execution and settlement. No bets are ever placed.
 
 The dashboard is available at `http://localhost:8501`.
 
@@ -133,7 +126,7 @@ pytest tests/ -v
 
 ## Paper Trading
 
-Oracle uses Manifold Markets as a paper trading venue. No real money is involved — Manifold uses play-money (mana). The paper broker simulates realistic exchange behaviour so the same code path runs unmodified when switching to live Betfair later.
+Oracle uses Betfair AU exchange data as the market feed. No real money is involved — `PaperBroker` simulates realistic exchange behaviour so the same code path runs unmodified when switching to live Betfair execution in Phase 6.
 
 ### Fill Simulation
 
@@ -152,7 +145,7 @@ The 70% liquidity safety factor ensures Oracle never moves the market against it
 
 ### Settlement
 
-Positions are checked for resolution at the top of every 30-minute scan cycle via `check_and_settle_positions()`. When a market resolves, P&L is calculated and the position is closed:
+Positions are checked for resolution at the top of every 30-minute scan cycle. When a market resolves, P&L is calculated and the position is closed:
 
 | Direction | Resolution | P&L |
 |-----------|------------|-----|
@@ -162,21 +155,13 @@ Positions are checked for resolution at the top of every 30-minute scan cycle vi
 | Lay | YES | `−liability` |
 | Back or Lay | MKT | partial win using `resolution_probability` as settlement price |
 
+Positions in markets that age beyond `betfair_max_market_age_hours` (168h) are auto-cancelled with escrow refund.
+
 Commission (`commission_pct = 0.05`) is applied to gross winnings only — never to losses.
 
 ### State File
 
 All bankroll, positions, and trade history are persisted to `state/oracle_state.json` after every trade and settlement. Writes are atomic (`tmp → replace()`). The file is git-ignored.
-
-```json
-{
-  "bankroll": 1000.0,
-  "peak_bankroll": 1043.20,
-  "positions": { "<market_id>": { ... } },
-  "trade_history": [ { ... } ],
-  "priors": { "<market_id>": 0.62 }
-}
-```
 
 To reset the paper bankroll, delete `state/oracle_state.json` — it will be recreated on next run.
 
@@ -190,7 +175,7 @@ To reset the paper bankroll, delete `state/oracle_state.json` — it will be rec
 p_fair = expit(logit(p_mid) + β · sentiment_delta)
 ```
 - `p_mid` — market mid-price (prior)
-- `β = 0.15` — conservative update weight, tuned via backtest
+- `β = 2.0` — update weight
 - Results are always in `(0, 1)` by construction
 
 ### Executable Edge
@@ -210,7 +195,7 @@ f  = k · f* · λ_conf · λ_dd
        k        = 0.50  (half-Kelly base)
        λ_conf   = clamp(confidence / 100, 0.5, 1.0)
        λ_dd     = 0.50 if drawdown > 20%, else 1.0
-f_final = min(f, 0.25)                   # hard cap: never >25% of bankroll
+f_final = min(f, kelly_hard_cap)
 size    = min(f_final · bankroll, liquidity × 0.70)
 ```
 
@@ -224,11 +209,11 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | 2 | Intelligence — LLM integration, enrichment | Complete |
 | 3 | Strategy & Risk — Kelly, Bayesian, edge, risk gates | Complete |
 | 4 | Paper Trading — state persistence, execution, dashboard | Complete |
-| 5A | Intelligence Upgrade — statistical model, LLM reframing | In progress |
+| 5A | Intelligence Upgrade — statistical model, team mapping, Perplexity enrichment | In progress |
 | 5 | Backtesting & Tuning — historical replay, parameter sweep | Not started |
 | 6 | Live Betfair — OMS, market mapping, safeguards | Not started |
 
-102 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution, and Betfair scanner modules.
+149 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution, team mapping, and Betfair scanner modules.
 
 ---
 
@@ -245,18 +230,8 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | `src/execution/paper.py` | Paper broker simulation |
 | `src/dashboard/app.py` | Streamlit monitoring UI |
 | `src/enrichment/stats.py` | Statistical data fetcher (football-data.org, Squiggle) |
-| `src/enrichment/team_mapping.py` | Betfair → stats API team name resolution |
+| `src/enrichment/team_mapping.py` | Betfair → stats API team name resolution (dynamic index) |
 | `src/strategy/statistical_model.py` | Poisson match outcome prediction model |
-
----
-
-## Dependencies
-
-Core: `httpx`, `tenacity`, `apscheduler`, `pydantic`, `pydantic-settings`, `scipy`, `pandas`
-Dashboard: `streamlit`, `plotly`
-Testing: `pytest`, `pytest-asyncio`, `hypothesis`
-
-See `requirements.txt` for pinned versions.
 
 ---
 
@@ -264,9 +239,10 @@ See `requirements.txt` for pinned versions.
 
 - **Kill switch**: `touch state/kill_switch.txt` — agent skips all new trades on next cycle
 - **Daily LLM cap**: Auto-downgrades to fast model at 80% of cap; returns `None` if cap exceeded
-- **Hard bet cap**: Kelly fraction capped at 0.25 — never more than 25% of bankroll on a single trade
+- **Hard bet cap**: Kelly fraction capped at `kelly_hard_cap` (configurable)
 - **Liquidity cap**: Never uses more than 70% of available market liquidity
 - **Drawdown throttle**: Kelly halved automatically when drawdown exceeds 20%
+- **Auto-cancel**: Positions in aged-out markets are auto-cancelled with escrow refund
 
 ---
 

@@ -91,7 +91,7 @@ def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> 
             "cost": cost,
             "pnl": 0,
         })
-        if t.get("status") == "settled" and t.get("exit_timestamp"):
+        if t.get("status") in ("settled", "cancelled") and t.get("exit_timestamp"):
             events.append({
                 "timestamp": t["exit_timestamp"],
                 "type": "settle",
@@ -127,7 +127,7 @@ def compute_cash_curve(trade_history: list[dict], initial_bankroll: float) -> pd
     for t in trade_history:
         cost = _trade_entry_cost(t)
         events.append({"timestamp": t.get("timestamp", ""), "delta": -cost})
-        if t.get("status") == "settled" and t.get("exit_timestamp"):
+        if t.get("status") in ("settled", "cancelled") and t.get("exit_timestamp"):
             pnl = t.get("pnl", 0) or 0
             events.append({"timestamp": t["exit_timestamp"], "delta": cost + pnl})
 
