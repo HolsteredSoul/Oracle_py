@@ -330,11 +330,13 @@ def get_markets(
             logger.debug("Skipping market %s — unsafe market type %r", cat.market_id, market_type)
             continue
 
-        # Runner name — the specific selection being priced
+        # Runner name and selection ID — the specific selection being priced
         runner_name = ""
+        selection_id = None
         _runners = getattr(cat, "runners", None)
         if _runners:
             runner_name = getattr(_runners[0], "runner_name", "") or ""
+            selection_id = getattr(_runners[0], "selection_id", None)
 
         # Build a descriptive question string that includes who/what is being priced
         if runner_name:
@@ -368,6 +370,7 @@ def get_markets(
             "home_team": home_team,
             "away_team": away_team,
             "event_type_id": str(event_type_id),
+            "selection_id": selection_id,
         })
 
     # Deduplicate by market ID (catalogue can return duplicates across batches)
@@ -478,9 +481,11 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         market_type = getattr(_desc, "market_type", "") or ""
 
     runner_name = ""
+    selection_id = None
     _runners = getattr(cat, "runners", None) if cat else None
     if _runners:
         runner_name = getattr(_runners[0], "runner_name", "") or ""
+        selection_id = getattr(_runners[0], "selection_id", None)
 
     if runner_name:
         name = (
@@ -496,6 +501,31 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
 
     start_dt = _ensure_utc(getattr(cat, "market_start_time", None)) if cat else None
 
+    # Determine resolution from runner status when market is settled/closed.
+    resolution = "MKT"  # default fallback
+    if is_resolved and book.runners:
+        # Match by selection_id if available, otherwise use runners[0]
+        target_runner = None
+        if selection_id is not None:
+            for r in book.runners:
+                if getattr(r, "selection_id", None) == selection_id:
+                    target_runner = r
+                    break
+        if target_runner is None:
+            target_runner = book.runners[0]
+
+        runner_status = getattr(target_runner, "status", "") or ""
+        _STATUS_MAP = {"WINNER": "YES", "LOSER": "NO"}
+        if runner_status in _STATUS_MAP:
+            resolution = _STATUS_MAP[runner_status]
+        elif runner_status in ("REMOVED", "REMOVED_VACANT"):
+            resolution = "VOID"
+        else:
+            logger.warning(
+                "Unknown runner status %r for market %s — falling back to MKT",
+                runner_status, market_id,
+            )
+
     return {
         "id": market_id,
         "question": name,
@@ -510,8 +540,7 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         "url": _market_url(market_id),
         "totalLiquidity": total_liquidity,
         "isResolved": is_resolved,
-        # Betfair markets don't resolve YES/NO — always use MKT settlement.
-        # PaperBroker.settle_position() handles MKT via resolution_probability.
-        "resolution": "MKT",
+        "resolution": resolution,
+        "selection_id": selection_id,
         "market_start_time": start_dt,
     }

@@ -116,6 +116,7 @@ class PaperBroker:
         uncertainty_penalty: float,
         available_liquidity: float,
         market_start_time: str | None = None,
+        selection_id: int | None = None,
     ) -> tuple[OracleState, Trade | None]:
         """Simulate a Fill-or-Kill paper order.
 
@@ -227,6 +228,7 @@ class PaperBroker:
             status="open",
             stake_abs=stake_abs,
             liability_abs=liability_abs,
+            selection_id=selection_id,
         )
 
         position = Position(
@@ -241,6 +243,7 @@ class PaperBroker:
             trade_id=trade.trade_id,
             p_fair_at_entry=p_fair,
             market_start_time=market_start_time,
+            selection_id=selection_id,
         )
 
         state.bankroll = bankroll_after
@@ -311,14 +314,23 @@ class PaperBroker:
         entry_price = position.entry_price
         direction = position.direction
 
-        if resolution == "MKT":
-            # Treat as partial YES win at resolution_probability
+        if resolution == "VOID":
+            # Runner removed — refund escrowed capital, no P&L
+            pnl = 0.0
+            commission_paid = 0.0
+        elif resolution == "MKT":
+            # Fallback: interpolate between YES/NO at resolution_probability.
+            # Should rarely be used now that runner.status is read directly.
             eff_price = resolution_probability
-            gross = stake_abs * (eff_price / entry_price - 1.0) if direction == "back" else (
-                stake_abs * (1.0 - eff_price) - liability_abs * eff_price
-            )
-            pnl = gross * (1.0 - commission_pct) if gross > 0 else gross
-            commission_paid = gross * commission_pct if gross > 0 else 0.0
+            if direction == "back":
+                gross = stake_abs * (eff_price / entry_price - 1.0)
+                pnl = gross * (1.0 - commission_pct) if gross > 0 else gross
+                commission_paid = gross * commission_pct if gross > 0 else 0.0
+            else:  # lay
+                win_portion = stake_abs * (1.0 - eff_price)
+                loss_portion = liability_abs * eff_price
+                commission_paid = win_portion * commission_pct if win_portion > 0 else 0.0
+                pnl = win_portion - commission_paid - loss_portion
         elif direction == "back":
             if resolution == "YES":
                 gross = stake_abs * (1.0 / entry_price - 1.0)

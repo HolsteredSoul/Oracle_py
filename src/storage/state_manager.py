@@ -72,6 +72,7 @@ class Trade(BaseModel):
     # Phase 5A.1 — CLV tracking:
     closing_price: Optional[float] = None           # last market price before kickoff suspension
     clv: Optional[float] = None                     # closing line value (positive = good entry)
+    selection_id: Optional[int] = None              # Betfair runner selection ID
 
 
 class Position(BaseModel):
@@ -88,6 +89,7 @@ class Position(BaseModel):
     trade_id: str                                    # FK to Trade record
     p_fair_at_entry: float
     market_start_time: Optional[str] = None          # ISO-8601 UTC event start
+    selection_id: Optional[int] = None               # Betfair runner selection ID
     # Phase 5A.1 — updated each scan cycle; becomes closing_price at settlement
     last_seen_price: Optional[float] = None
 

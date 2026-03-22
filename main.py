@@ -100,6 +100,7 @@ def _analyse_and_trade(
     away_team = market.get("away_team", "")
     event_type_id = market.get("event_type_id", "")
     market_start_time = market.get("market_start_time")
+    selection_id = market.get("selection_id")
 
     # --- Statistical model (Phase 5A.2) ---
     p_model: float | None = None
@@ -348,6 +349,7 @@ def _analyse_and_trade(
         uncertainty_penalty=uncertainty_penalty,
         available_liquidity=available_liquidity,
         market_start_time=mst_iso,
+        selection_id=selection_id,
     )
     if trade is not None:
         state.priors[market_id] = p_fair
@@ -419,6 +421,11 @@ def _settle_betfair_positions(
         mst = detail.get("market_start_time")
         if mst and not state.positions[market_id].market_start_time:
             state.positions[market_id].market_start_time = mst.isoformat()
+
+        # Backfill selection_id for positions opened before this field existed
+        sid = detail.get("selection_id")
+        if sid is not None and state.positions[market_id].selection_id is None:
+            state.positions[market_id].selection_id = sid
 
         if detail.get("isResolved"):
             resolution = detail.get("resolution", "MKT")

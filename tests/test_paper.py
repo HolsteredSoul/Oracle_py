@@ -401,6 +401,80 @@ class TestSettlePosition:
         assert state.bankroll == pytest.approx(bankroll_pre + liability_abs + expected_pnl, rel=1e-4)
 
 
+    def test_settle_void_refunds_escrow(self, broker, fresh_state):
+        """VOID resolution: pnl=0, escrow returned in full (back)."""
+        state, _ = self._setup_back_position(broker, fresh_state, entry_price=0.50, f_final=0.05)
+        stake_abs = 0.05 * DEFAULT_BANKROLL
+        bankroll_pre = state.bankroll  # 950
+
+        state, settled = broker.settle_position(state, "mkt-1", "VOID", 0.0)
+
+        assert settled.pnl == pytest.approx(0.0)
+        assert settled.commission_paid == pytest.approx(0.0)
+        # Escrow fully returned: 950 + 50 + 0 = 1000
+        assert state.bankroll == pytest.approx(bankroll_pre + stake_abs, rel=1e-4)
+
+    def test_settle_void_lay_refunds_liability(self, broker, fresh_state):
+        """VOID resolution: pnl=0, lay escrow (liability) returned in full."""
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-lay-void",
+            question="Will X?",
+            direction="lay",
+            f_final=0.05,
+            fill_price=0.50,
+            edge=0.05,
+            p_fair=0.45,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.30,
+            available_liquidity=100_000.0,
+        )
+        assert trade is not None
+        liability_abs = state.positions["mkt-lay-void"].liability_abs
+        bankroll_pre = state.bankroll
+
+        state, settled = broker.settle_position(state, "mkt-lay-void", "VOID", 0.0)
+
+        assert settled.pnl == pytest.approx(0.0)
+        assert state.bankroll == pytest.approx(bankroll_pre + liability_abs, rel=1e-4)
+
+    def test_settle_lay_mkt_commission_on_win_portion(self, broker, fresh_state):
+        """lay + MKT: commission applies to win portion even when net P&L is negative."""
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-lay-mkt",
+            question="Will X?",
+            direction="lay",
+            f_final=0.05,
+            fill_price=0.30,
+            edge=0.05,
+            p_fair=0.25,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.30,
+            available_liquidity=100_000.0,
+        )
+        assert trade is not None
+        pos = state.positions["mkt-lay-mkt"]
+        stake_abs = pos.stake_abs
+        liability_abs = pos.liability_abs
+        bankroll_pre = state.bankroll
+
+        # Settle at 0.50 — partial outcome
+        state, settled = broker.settle_position(state, "mkt-lay-mkt", "MKT", 0.50)
+
+        # Correct formula: win_portion = stake * (1 - 0.5), loss_portion = liability * 0.5
+        win_portion = stake_abs * 0.5
+        loss_portion = liability_abs * 0.5
+        expected_commission = win_portion * 0.05
+        expected_pnl = win_portion - expected_commission - loss_portion
+        assert settled.pnl == pytest.approx(expected_pnl, rel=1e-4)
+        assert settled.commission_paid == pytest.approx(expected_commission, rel=1e-4)
+
+
 # ---------------------------------------------------------------------------
 # cancel_position
 # ---------------------------------------------------------------------------
