@@ -68,6 +68,7 @@ class Trade(BaseModel):
     exit_timestamp: Optional[str] = None
     commission_paid: Optional[float] = None
     stake_abs: Optional[float] = None               # stored for dashboard display
+    liability_abs: Optional[float] = None            # lay liability — for dashboard cost display
     # Phase 5A.1 — CLV tracking:
     closing_price: Optional[float] = None           # last market price before kickoff suspension
     clv: Optional[float] = None                     # closing line value (positive = good entry)

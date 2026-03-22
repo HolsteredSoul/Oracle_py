@@ -16,16 +16,16 @@ margin_min_live = 0.015
 
 [risk]
 max_exposure = 0.85
-drawdown_throttle_pct = 0.20
+drawdown_throttle_pct = 0.25
 drawdown_throttle_factor = 0.50
 confidence_floor = 35
 commission_pct = 0.05
 beta = 2.00
 liquidity_safety_factor = 0.70
-kelly_base_fraction = 0.50
-kelly_hard_cap = 0.10
+kelly_base_fraction = 0.75
+kelly_hard_cap = 0.20
 lay_max_pnl_pct = 0.15
-paper_max_cost_aud = 100.0
+paper_max_cost_aud = 200.0
 
 [scanner]
 poll_interval_sec = 1800

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +28,26 @@ _STATE_PATH = Path("state/oracle_state.json")
 _SPEND_PATH = Path("state/llm_spend.json")
 _REFRESH_INTERVAL_SEC = 60
 _DAILY_CAP_USD = 5.0   # default; overridden by spend file if available
+_LOCAL_TZ = timezone(timedelta(hours=8))  # WAST (Perth)
+_DISPLAY_FMT = "%b %d, %I:%M %p"          # e.g. "Mar 22, 09:30 PM"
+
+
+def _to_local(iso_str: str, fmt: str = _DISPLAY_FMT) -> str:
+    """Parse an ISO-8601 UTC string and return it formatted in local time."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(_LOCAL_TZ).strftime(fmt)
+    except Exception:
+        return iso_str
+
+
+def _df_timestamps_to_local(df: pd.DataFrame, col: str = "timestamp") -> pd.DataFrame:
+    """Convert a UTC-aware datetime column to local timezone for display."""
+    if col in df.columns and hasattr(df[col], "dt"):
+        df[col] = df[col].dt.tz_convert(_LOCAL_TZ)
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +134,7 @@ def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> 
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    _df_timestamps_to_local(df)
     return df
 
 
@@ -140,6 +161,7 @@ def compute_cash_curve(trade_history: list[dict], initial_bankroll: float) -> pd
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
+    _df_timestamps_to_local(df)
     return df
 
 
@@ -218,6 +240,7 @@ def render_pnl_panel(trade_history: list[dict]) -> None:
     df = pd.DataFrame(settled)[["timestamp", "pnl", "market_id"]].copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
+    _df_timestamps_to_local(df)
     df["cumulative_pnl"] = df["pnl"].cumsum()
     colors = ["#00CC96" if p >= 0 else "#EF553B" for p in df["pnl"]]
 
@@ -263,6 +286,7 @@ def render_clv_panel(trade_history: list[dict]) -> None:
     df = pd.DataFrame(settled_with_clv)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
+    _df_timestamps_to_local(df)
 
     avg_clv = df["clv"].mean()
     total_trades_clv = len(df)
@@ -349,11 +373,7 @@ def render_position_table(positions: dict, trade_history: list[dict] | None = No
         mst = pos.get("market_start_time", "")
         event_date = ""
         if mst:
-            try:
-                dt = datetime.fromisoformat(mst)
-                event_date = dt.strftime("%b %d %H:%M")
-            except (ValueError, TypeError):
-                event_date = mst[:16]
+            event_date = _to_local(mst)
         cost = (
             pos.get("liability_abs", 0)
             if pos.get("direction") == "lay"
@@ -396,6 +416,11 @@ def render_trade_log(trade_history: list[dict]) -> None:
         rows.append({c: t.get(c, "") for c in cols})
 
     df = pd.DataFrame(rows)
+    # Convert timestamps to local readable format
+    if "timestamp" in df.columns:
+        df["timestamp"] = df["timestamp"].apply(
+            lambda v: _to_local(v) if isinstance(v, str) and v else v
+        )
     df.rename(columns={"question": "Market"}, inplace=True)
     # Format numerics
     for col in ["filled_size", "fill_price", "edge", "p_fair", "conf_score"]:
@@ -410,7 +435,7 @@ def render_trade_log(trade_history: list[dict]) -> None:
 def render_llm_cost_panel(spend: dict) -> None:
     """Panel 7: LLM cost — today's spend vs daily cap."""
     st.subheader("LLM Cost")
-    today = str(datetime.now(timezone.utc).date())
+    today = str(datetime.now(_LOCAL_TZ).date())
     today_spend = spend.get(today, 0.0)
     cap = _DAILY_CAP_USD
 
@@ -462,7 +487,7 @@ def main() -> None:
     equity = bankroll + deployed_capital
 
     # --- Top metrics row ---
-    st.caption(f"Last updated: {last_updated}")
+    st.caption(f"Last updated: {_to_local(last_updated)}")
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Equity", f"${equity:.2f}")
     col2.metric("Cash", f"${bankroll:.2f}")

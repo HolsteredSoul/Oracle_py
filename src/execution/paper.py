@@ -226,6 +226,7 @@ class PaperBroker:
             bankroll_after=bankroll_after,
             status="open",
             stake_abs=stake_abs,
+            liability_abs=liability_abs,
         )
 
         position = Position(
