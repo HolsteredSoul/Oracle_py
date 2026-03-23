@@ -488,100 +488,90 @@ pytest-asyncio>=0.23
 
 ---
 
-## 11. Edge Source Assessment & Upgrade Path
+## 11. Edge Source Assessment & Intelligence Architecture
 
-*Added March 2026 after Phase 4 paper trading validation.*
+*Updated March 2026 — reflects completed Phase 5A intelligence upgrades and Phase 4C execution realism.*
 
-### 11.1 Honest Assessment of the Current Intelligence Layer
+### 11.1 The Adversary
 
-The infrastructure (scanner, risk management, Kelly sizing, settlement, dashboard) is production-quality and battle-tested through Phase 4. However, **the current intelligence layer — LLM reading news headlines — is unlikely to generate sustained profit on live Betfair exchange markets.** This section explains why and outlines the upgrade path.
+Betfair exchange prices are not soft bookmaker odds. They are set by thousands of participants including professional syndicates with statistical models, real-time team sheet scrapers, injury databases, Elo rating systems, expected goals (xG) models, and decades of domain expertise. By the time a price is live on the exchange, it already incorporates most publicly available information.
 
-**The adversary is strong.** Betfair exchange prices are not soft bookmaker odds. They are set by thousands of participants including professional syndicates with statistical models, real-time team sheet scrapers, injury databases, Elo rating systems, expected goals (xG) models, and decades of domain expertise. By the time a price is live on the exchange, it already incorporates most publicly available information.
+To overcome Betfair's 5% commission on net winnings plus typical 2–4% bid-ask spread, Oracle needs to be systematically correct by ~7–9% — not occasionally lucky. This requires a multi-source intelligence stack, not a single signal.
 
-**The current signal is weak.** The agent reads a few news headlines (via NewsData.io and Google News RSS) and asks an LLM (Grok-fast or Claude-Sonnet) to return a `sentiment_delta`. This is a qualitative, vibes-based assessment — e.g., "Macarthur lost 4-1 recently, so they're probably worse than priced." That reasoning, while correct, is exactly what the market has already priced in. The headlines the LLM reads are hours to days old; the market moved on that information long before the agent saw it.
+### 11.2 Current Intelligence Stack (Implemented)
 
-**The math is marginal.** Betfair takes 5% commission on net winnings. The real spread on match-odds markets is typically 2–4%. To overcome commission + spread, the agent needs to be right by more than ~7–9% consistently. The LLM's delta adjustments (typically 0.05–0.20 in probability space) are in the right ballpark mathematically, but they need to be *systematically correct* — not just plausible-sounding. There is no evidence yet that "LLM reads headlines" produces calibrated probability improvements over Betfair consensus.
+Oracle uses a four-layer signal architecture. No single layer is sufficient alone; together they cover quantitative, qualitative, and execution edges.
 
-**The longshot bias is already priced.** The LLM frequently cites "longshot bias" (punters overbet longshots, underbet favorites) as a reason to trade. This is a real phenomenon in bookmaker markets, but Betfair is an exchange — the bias is significantly weaker because participants are trading against each other, not against a bookmaker's margin. The LLM does not distinguish between bookmaker odds and exchange odds.
+#### Layer 1: Statistical Model (Primary Signal) ✅
 
-### 11.2 What Would Make This Profitable
+An **independent Poisson model** produces calibrated match outcome probabilities from team scoring rates. This replaces the raw market mid-price as the Bayesian prior.
 
-The platform is ready. The intelligence layer needs upgrading. These are ranked by expected impact:
+- **football-data.org** — European football leagues: goals scored/conceded per team, attack/defence strength parameters.
+- **Squiggle API** — AFL: predicted margins, win probabilities, team ratings.
+- **basketball-api-sports.io** — NBA and international basketball leagues.
 
-#### Tier 1: Statistical Data Integration (Highest Impact)
+The Poisson model computes `P(home scores X) × P(away scores Y)` across a goal matrix, then aggregates into home-win / draw / away-win probabilities. For AFL, a logistic model on Elo difference is used instead.
 
-Replace or supplement LLM-headline analysis with actual sports data. APIs such as football-data.org, Sportmonks, FBref, or AFL Tables provide match statistics — expected goals (xG), shots on target, possession, head-to-head records, team form over last 5/10/20 matches.
+`team_mapping.py` provides fuzzy-matched name resolution between Betfair runner names and stats API identifiers, with a Perplexity Sonar fallback for unresolved names and persistent disk caching.
 
-A simple logistic regression or gradient-boosted model trained on xG and form data would produce better-calibrated probability estimates than an LLM reading headlines. The LLM can still add value for qualitative factors (manager sacked, dressing room turmoil, travel fatigue) but should not be the primary signal source.
-
-**Current implementation (Phase 5A — in progress):**
-
-The statistical layer uses an **independent Poisson model** for match outcome probabilities. Each team's expected goals are estimated from recent scoring/conceding rates fetched from two data sources:
-
-- **football-data.org** — European football leagues: historical match results, goals scored/conceded per team, used to compute attack/defence strength parameters.
-- **Squiggle API** — AFL: predicted margins, win probabilities, and team ratings for Australian football.
-
-`team_mapping.py` provides a fuzzy-matched lookup table mapping Betfair runner names to the canonical team identifiers used by each stats API. This handles discrepancies like "Brisbane Lions" (Betfair) → "Brisbane" (Squiggle) or "Wolverhampton" (Betfair) → "Wolves" (football-data.org).
-
-The Poisson model computes `P(home scores X) × P(away scores Y)` across a goal matrix, then aggregates into home-win / draw / away-win probabilities. These become the statistical prior `p_model`, replacing the raw market mid-price as the Bayesian prior. The LLM delta from Gemini 2.0 Flash is applied as a secondary adjustment on top.
-
-**Implementation path:**
 ```
-src/enrichment/stats.py          — fetch scoring rates from football-data.org + Squiggle
-src/enrichment/team_mapping.py   — Betfair ↔ stats API name resolution (fuzzy match)
-src/strategy/statistical_model.py — independent Poisson model producing p_fair
-src/llm/prompts.py               — LLM receives statistical model output + news
-                                    as inputs; provides adjustment delta on top
+src/enrichment/stats.py            — fetch scoring rates from football-data.org + Squiggle + basketball
+src/enrichment/team_mapping.py     — Betfair ↔ stats API name resolution (index + fuzzy + Perplexity fallback)
+src/strategy/statistical_model.py  — Poisson (football) / logistic (AFL/basketball) model → p_model
 ```
 
-The Bayesian framework already supports this: replace `p_mid` (market price) as the prior with the statistical model's `p_model`, then use the LLM delta as a secondary adjustment.
+#### Layer 2: LLM Qualitative Overlay ✅
 
-#### Tier 2: Pre-Match Team Sheet Edge (Time-Sensitive Alpha)
+The LLM (Gemini 2.5 Flash Lite for light scans, Claude Sonnet 4.6 for deep analysis) acts as a **calibrator, not an oracle**. It receives the statistical model's `p_model` and news/sentiment context, then returns a `sentiment_delta` adjustment for factors statistics cannot capture: injuries, weather, travel fatigue, morale, managerial changes.
 
-Team lineups are announced 60–90 minutes before kickoff. If the agent ingests lineups and compares them to expected lineups (key player missing, unexpected formation change, debut player starting), that is a genuine informational edge that moves markets. The window is narrow (60–90 minutes), and the agent must act before the market fully adjusts.
+The Bayesian updater applies this delta in logit-space: `p_fair = expit(logit(p_model) + β · sentiment_delta)`.
 
-**Implementation path:**
-- Subscribe to a lineup API (e.g., Sportmonks, API-Football)
-- Compare announced XI to predicted XI
-- Trigger a deep LLM analysis with lineup diff as context
-- Execute within the pre-match window before market adjusts
+Edge candidates are further validated via **Perplexity Sonar** web search — a grounded deep re-scan with fresh internet context before execution.
 
-This is where LLMs genuinely add value — interpreting the *significance* of a lineup change (e.g., "star striker rested" vs "star striker injured") is qualitative reasoning that statistical models struggle with.
+#### Layer 3: CLV Tracking (Diagnostic) ✅
 
-#### Tier 3: Closing Line Value (CLV) Tracking (Diagnostic, Not Directly Profitable)
+Closing Line Value is tracked on every trade. At settlement, the last observed market price before suspension becomes `closing_price`. CLV is computed as:
+- Back: `CLV = closing_price - entry_price` (positive = entered at better price than market closed at)
+- Lay: `CLV = entry_price - closing_price`
 
-Closing line value is the industry-standard diagnostic for whether a bettor has real edge. Track whether the agent's entry price is better than the closing price (the final price when the market suspends at kickoff).
+Aggregate CLV is displayed in the dashboard with a Phase 5A.1 exit gate: 100+ trades with CLV > 0 indicates real edge. CLV ≤ 0 after 100 trades means the signal does not beat the closing line regardless of short-term P&L.
 
-If Oracle consistently beats the closing line, it has real edge — even if individual bets lose. If it does not beat the closing line, it is not profitable long-term regardless of short-term results.
+#### Layer 4: Execution Realism (Phase 4C) ✅
 
-**Implementation:** Add a `closing_price` field to the Trade record. At settlement, fetch the final pre-kickoff price from Betfair and compute `CLV = entry_price - closing_price`. Track aggregate CLV in the dashboard.
+Paper trading simulates real exchange execution friction:
 
-#### Tier 4: Market Microstructure Signals (Advanced)
+- **Depth-aware VWAP fills** — walks the full `EX_ALL_OFFERS` order book ladder
+- **Slippage model** — linear or sqrt price impact proportional to order size / liquidity, with edge re-check and trade abort if slippage destroys margin
+- **Queue-position model** — probabilistic Bernoulli draw per ladder level simulating order queue friction (large orders face steep fill rejection)
+- **In-play safety gate** — blocks all in-play markets (no in-play engine)
+- **Crossed-book detection** — rejects stale/suspended market data
+- **Fill-rate tracking** — logs filled fractions for calibration against live fills
 
-Betfair provides real-time order book depth. Price movements, volume spikes, and order-book imbalances in the minutes before an event can signal informed money entering the market. This is effectively front-running sharp bettors — not by seeing their orders, but by detecting market footprint patterns.
+### 11.3 Remaining Gaps & Next Steps
 
-This is significantly more complex to implement and requires high-frequency data collection. It is a Phase 6+ enhancement.
+| Priority | Enhancement | Status | Expected Impact |
+|----------|-------------|--------|-----------------|
+| 1 | Statistical model calibration validation | Not started | Verify Poisson/logistic predictions match observed outcomes across probability bins |
+| 2 | Historical replay backtesting (Phase 5) | Not started | Parameter sweep on held-out data; Sharpe > 0 required |
+| 3 | Pre-match lineup ingestion | Not started | Time-sensitive alpha in 60–90 min pre-kickoff window |
+| 4 | Market microstructure signals | Not started | Order-book imbalance detection for informed-money front-running |
+| 5 | Commission tier modeling | Not started | Replace fixed 5% with market-type-specific rates |
+| 6 | Market-type fill difficulty | Not started | Different queue friction for horse racing vs AFL match odds |
 
-### 11.3 Recommended Transition Plan
-
-| Phase | Signal Source | Purpose |
-|---|---|---|
-| Phase 4 (current) | LLM + headlines | Validate pipeline mechanics, collect trade data |
-| Phase 5A (in progress) | CLV tracking + statistical model (football-data.org, Squiggle) + Poisson model + Gemini 2.0 Flash | Diagnose CLV, replace LLM as primary signal with independent Poisson model; LLM becomes secondary calibrator |
-| Phase 5B (new) | Refine statistical model (xG/form, broader leagues) | Expand coverage, tune model parameters against CLV data |
-| Phase 5C (new) | Add lineup ingestion | Time-sensitive alpha during pre-match window |
-| Phase 6 | Statistical model + LLM + lineups | Live money with validated multi-source signal |
+**Pre-match lineups** are the highest-value remaining signal source. Team lineups announced 60–90 minutes before kickoff create a genuine informational edge window. This is where LLMs add the most value — interpreting the *significance* of a change ("star striker rested" vs "star striker injured") is qualitative reasoning that statistical models cannot replicate.
 
 ### 11.4 Config Changes: Paper → Live
 
-| Parameter | Paper (Phase 4) | Live (Phase 6) | Rationale |
+| Parameter | Paper (Current) | Live (Phase 6) | Rationale |
 |---|---|---|---|
 | `margin_min` | 0.030 | 0.025–0.030 | Wider margin compensates for real slippage |
 | `confidence_floor` | 35 | 52–55 | Only trade when genuinely confident with real money |
-| `kelly_base_fraction` | 0.50 | 0.25 | Quarter-Kelly reduces variance for live trading |
+| `kelly_base_fraction` | 0.75 | 0.25 | Quarter-Kelly reduces variance for live trading |
 | `max_exposure` | 0.85 | 0.50 | Don't have >50% of bankroll at risk simultaneously |
-| `drawdown_throttle_pct` | 0.20 | 0.15 | Throttle earlier with real money |
-| `_HARD_CAP` (code) | 0.10 | 0.15 | Raise slightly once signal is validated |
+| `drawdown_throttle_pct` | 0.25 | 0.15 | Throttle earlier with real money |
+| `kelly_hard_cap` | 0.20 | 0.15 | Raise slightly once signal is validated |
+| `queue_position_model` | `"probabilistic"` | `"none"` | Real exchange handles queue natively |
+| `allow_in_play` | `false` | `false` | Keep blocked until dedicated in-play engine built |
 | `MAX_SINGLE_BET_AUD` (code) | N/A | 20.0 | Hard-coded ceiling for first 30 days |
 | `MAX_DAILY_LOSS_AUD` (code) | N/A | 100.0 | Kill switch if daily P&L hits this |
 
