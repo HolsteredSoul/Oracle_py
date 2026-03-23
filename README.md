@@ -106,6 +106,13 @@ pip install -r requirements.txt
    max_lay_probability = 0.90        # Block extreme-odds lays
    slippage_model = "linear"         # Price impact model: "none", "linear", "sqrt"
    slippage_factor = 0.10            # Impact coefficient
+   allow_in_play = false             # Block trades on in-play markets
+   reject_crossed_book = true        # Skip stale/crossed order books
+
+   [paper]
+   queue_position_model = "probabilistic"  # "none", "linear", "probabilistic"
+   queue_factor = 0.50                     # Hidden queue depth as fraction of visible
+   track_fill_rates = true                 # Log fill rates for calibration
    ```
 
 ### Running
@@ -143,6 +150,8 @@ Before any trade is placed, three filters reject unrealistic opportunities:
 | Minimum liquidity | `min_market_liquidity_aud` | $50 | Skip markets with insufficient available depth |
 | Minimum volume | `min_matched_volume_aud` | $500 | Skip markets with no meaningful trading history |
 | Extreme lay filter | `max_lay_probability` | 0.90 | Block lays at odds < 1.11 where real liquidity is near-zero |
+| In-play safety | `allow_in_play` | `false` | Block trades on in-play markets (no in-play engine) |
+| Crossed-book | `reject_crossed_book` | `true` | Skip markets with stale/crossed order book data |
 
 ### Fill Simulation
 
@@ -166,6 +175,15 @@ impact = slippage_factor × (order_size / available_liquidity)
 ```
 
 If slippage degrades edge below `margin_min`, the trade is skipped entirely.
+
+**Queue-position model** (applied per ladder level before VWAP):
+```
+Queue model simulates order queue friction — you're not first in line.
+  "none":          Fill all displayed volume (optimistic baseline)
+  "linear":        Discount by your share: effective = available × (1 - factor × share)
+  "probabilistic": Bernoulli draw per level (most realistic — default)
+  Config: [paper] queue_position_model, queue_factor
+```
 
 **Fallback** (when depth data unavailable):
 ```
@@ -245,7 +263,7 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | 5 | Backtesting & Tuning — historical replay, parameter sweep | Not started |
 | 6 | Live Betfair — OMS, market mapping, safeguards | Not started |
 
-211 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution (including depth fill, slippage, and integration tests), team mapping, and Betfair scanner modules.
+220 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution (including depth fill, slippage, queue-position model, and integration tests), team mapping, and Betfair scanner modules.
 
 ---
 
@@ -277,6 +295,9 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 - **Extreme lay filter**: Lays at implied probability > 90% (odds < 1.11) are blocked
 - **Slippage model**: Fill prices degrade proportional to order size / available liquidity
 - **Depth-aware fills**: Orders walk the real Betfair order book ladder — no free fills at top-of-book
+- **Queue-position model**: Simulates order queue friction — large orders face probabilistic fill rejection per level
+- **In-play gate**: Markets detected as in-play are rejected before execution
+- **Crossed-book gate**: Markets with crossed order books (stale data) are rejected
 - **Drawdown throttle**: Kelly halved automatically when drawdown exceeds 20%
 - **Auto-cancel**: Positions in aged-out markets are auto-cancelled with escrow refund
 

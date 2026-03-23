@@ -304,6 +304,13 @@ min_matched_volume_aud = 500.0          # skip markets with < $500 matched volum
 max_lay_probability = 0.90              # block lays at odds < 1.11
 slippage_model = "linear"              # "none", "linear", or "sqrt"
 slippage_factor = 0.10                 # price impact coefficient
+allow_in_play = false                  # reject in-play markets (no in-play engine)
+reject_crossed_book = true             # skip crossed order books (stale data)
+
+[paper]
+queue_position_model = "probabilistic" # "none", "linear", "probabilistic"
+queue_factor = 0.50                    # hidden queue depth factor
+track_fill_rates = true                # log fill rates for calibration
 
 [scanner]
 poll_interval_sec = 1800                # 30 min base timer

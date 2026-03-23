@@ -245,6 +245,24 @@ Paper trading P&L audit revealed 56% of profit came from extreme-odds lays (1.01
 4. **Extreme lay filter**: Lays with implied probability > 90% (decimal odds < 1.11) are blocked entirely.
 5. **Trade history backfill**: Script to recover missing resolution/runner_status metadata from settlement logs for trades settled before the persistence fix.
 
+**Phase 4C — Advanced Paper-Trading Realism** ✅ *Completed 2026-03-23*
+
+Queue-position model and safety gates added to close the gap between paper and live execution:
+
+1. **Queue-position model**: `_depth_fill()` now simulates order queue friction. Three modes: `"none"` (optimistic baseline), `"linear"` (volume discount per level), `"probabilistic"` (Bernoulli draw — small orders fill easily, large orders face steep friction). Configured via new `[paper]` section in `config.toml`.
+2. **In-play safety gate**: Blocks all trades on in-play markets (`allow_in_play = false`). Prevents fills against stale prices in suspended markets. Critical safety measure for Phase 6.
+3. **Crossed-book detection**: Skips markets where `best_back_price > best_lay_price` (indicates stale data or undetected suspension). Configured via `reject_crossed_book = true`.
+4. **Fill-rate tracking**: Logs `filled_fraction` per trade for calibration against live fills. Enabled via `track_fill_rates = true` in `[paper]` section.
+5. **Dashboard realism panel**: Scored feature checklist (X/10) showing ON/OFF status for each realism feature.
+6. **New `[paper]` config section**: Dedicated section for paper-trading realism parameters (queue model, adverse drift placeholder, fill-rate tracking).
+
+Phase 4C exit criteria (for future evaluation after 100+ trades under new model):
+- Queue-position model active (`queue_position_model != "none"`)
+- In-play gate and crossed-book detection active
+- Mean fill fraction ≤ 0.92
+- Queue model reduces paper P&L vs without (measurable pessimism)
+- All tests pass (220 tests, including 10 new Phase 4C tests)
+
 ---
 
 ## Phase 5: Backtesting & Tuning
