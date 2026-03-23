@@ -101,6 +101,11 @@ pip install -r requirements.txt
    [risk]
    max_exposure = 0.85          # Max fraction of bankroll in open positions
    kelly_base_fraction = 0.50   # Half-Kelly (conservative default)
+   min_market_liquidity_aud = 50.0   # Skip illiquid markets
+   min_matched_volume_aud = 500.0    # Skip untraded markets
+   max_lay_probability = 0.90        # Block extreme-odds lays
+   slippage_model = "linear"         # Price impact model: "none", "linear", "sqrt"
+   slippage_factor = 0.10            # Impact coefficient
    ```
 
 ### Running
@@ -129,20 +134,46 @@ pytest tests/ -v
 
 Oracle uses Betfair AU exchange data as the market feed. No real money is involved — `PaperBroker` simulates realistic exchange behaviour so the same code path runs unmodified when switching to live Betfair execution in Phase 6.
 
+### Pre-Trade Realism Gates
+
+Before any trade is placed, three filters reject unrealistic opportunities:
+
+| Gate | Config key | Default | Purpose |
+|------|-----------|---------|---------|
+| Minimum liquidity | `min_market_liquidity_aud` | $50 | Skip markets with insufficient available depth |
+| Minimum volume | `min_matched_volume_aud` | $500 | Skip markets with no meaningful trading history |
+| Extreme lay filter | `max_lay_probability` | 0.90 | Block lays at odds < 1.11 where real liquidity is near-zero |
+
 ### Fill Simulation
 
-Every order is Fill-or-Kill:
+Every order is Fill-or-Kill with depth-aware execution:
 
+**With order book depth** (default — uses `EX_ALL_OFFERS` from Betfair):
 ```
-requested_size = f_final × bankroll
+Walk the full price ladder level-by-level:
+  At each level: consume min(remaining_cost, level_size) at that level's price
+  Track volume-weighted average price (VWAP) across consumed levels
+  If ladder exhausted → partial fill at whatever was consumed
+  Effective fill price = VWAP (worse than top-of-book for large orders)
+```
 
+**Slippage model** (applied on top of VWAP):
+```
+impact = slippage_factor × (order_size / available_liquidity)
+  Back: price increases (worse for buyer)
+  Lay:  price decreases (worse for seller)
+  Models: "linear" (default), "sqrt", or "none"
+```
+
+If slippage degrades edge below `margin_min`, the trade is skipped entirely.
+
+**Fallback** (when depth data unavailable):
+```
 if requested_size ≤ available_liquidity × 0.70:
     fill at 100%
 else:
     fill at random.uniform(60%, 90%)   # partial fill
 ```
-
-The 70% liquidity safety factor ensures Oracle never moves the market against itself.
 
 ### Settlement
 
@@ -214,7 +245,7 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 | 5 | Backtesting & Tuning — historical replay, parameter sweep | Not started |
 | 6 | Live Betfair — OMS, market mapping, safeguards | Not started |
 
-181 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution, team mapping, and Betfair scanner modules.
+211 unit tests passing across Kelly, Bayesian, edge, risk, state manager, paper execution (including depth fill, slippage, and integration tests), team mapping, and Betfair scanner modules.
 
 ---
 
@@ -241,7 +272,11 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 - **Kill switch**: `touch state/kill_switch.txt` — agent skips all new trades on next cycle
 - **Daily LLM cap**: Auto-downgrades to fast model at 80% of cap; returns `None` if cap exceeded
 - **Hard bet cap**: Kelly fraction capped at `kelly_hard_cap` (configurable)
-- **Liquidity cap**: Never uses more than 70% of available market liquidity
+- **Liquidity gate**: Markets with < $50 available liquidity are rejected before any LLM spend
+- **Volume gate**: Markets with < $500 matched volume are rejected
+- **Extreme lay filter**: Lays at implied probability > 90% (odds < 1.11) are blocked
+- **Slippage model**: Fill prices degrade proportional to order size / available liquidity
+- **Depth-aware fills**: Orders walk the real Betfair order book ladder — no free fills at top-of-book
 - **Drawdown throttle**: Kelly halved automatically when drawdown exceeds 20%
 - **Auto-cancel**: Positions in aged-out markets are auto-cancelled with escrow refund
 

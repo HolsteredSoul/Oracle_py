@@ -229,11 +229,21 @@ class StateManager:
 - ~~Settlement uses `_settle_betfair_positions()` in `main.py`~~
 - ~~18 unit tests in `tests/test_betfair_scanner.py` (mocked API, no network required)~~
 
-**Phase 4 Exit Gate:**
-- [ ] 50 paper trades logged over ≥ 1 week
-- [ ] P&L accounting matches manual check on 5 random trades
-- [ ] Agent survives 72 hours continuous running without crash
-- [ ] Dashboard displays all panels correctly
+**Phase 4 Exit Gate:** ✅ *Completed 2026-03-23*
+- [x] 50 paper trades logged over ≥ 1 week
+- [x] P&L accounting matches manual check on 5 random trades (all 38 settled trades verified with zero mismatches)
+- [x] Agent survives 72 hours continuous running without crash
+- [x] Dashboard displays all panels correctly
+
+**Phase 4B — Betfair-Realistic Paper Trading** ✅ *Completed 2026-03-23*
+
+Paper trading P&L audit revealed 56% of profit came from extreme-odds lays (1.01–1.05) with no real-world liquidity, and fills assumed zero slippage. Five layers of realism added:
+
+1. **Order book depth**: `get_market_detail()` upgraded to `EX_ALL_OFFERS` (full price ladder). `_depth_fill()` walks the ladder level-by-level, computing VWAP fill price and actual fill fraction.
+2. **Slippage model**: `_apply_slippage()` degrades fill price proportional to `order_size / available_liquidity`. Supports `linear` and `sqrt` models. Edge rechecked after slippage — trade skipped if edge destroyed.
+3. **Pre-trade gates**: Minimum liquidity ($50), minimum matched volume ($500), and max lay probability (0.90) filters block unrealistic trades before any LLM spend.
+4. **Extreme lay filter**: Lays with implied probability > 90% (decimal odds < 1.11) are blocked entirely.
+5. **Trade history backfill**: Script to recover missing resolution/runner_status metadata from settlement logs for trades settled before the persistence fix.
 
 ---
 
@@ -559,11 +569,11 @@ def lineup_surprise(announced: list[str], expected: list[str]) -> list[str]:
 ---
 
 **Phase 5A Exit Gate:**
-- [ ] CLV tracking implemented and running for 100+ paper trades
+- [x] CLV tracking implemented and running for 100+ paper trades
 - [ ] If CLV ≤ 0: statistical model integrated and producing calibrated probabilities
 - [ ] Statistical model calibration plot shows < 10% systematic error across probability bins
-- [ ] LLM prompts updated to receive statistical model output as context
-- [ ] At least one sports data API integrated and returning match-level statistics
+- [x] LLM prompts updated to receive statistical model output as context
+- [x] At least one sports data API integrated and returning match-level statistics (football-data.org, Squiggle, basketball API)
 - [ ] Agent paper-trades with upgraded signal for ≥ 1 week before proceeding to Phase 5 backtesting
 
 ---

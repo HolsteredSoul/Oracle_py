@@ -299,6 +299,11 @@ commission_pct = 0.05                   # Betfair standard (5%)
 beta = 0.15                             # Bayesian update weight (tune in backtest)
 liquidity_safety_factor = 0.70
 kelly_base_fraction = 0.50              # half-Kelly
+min_market_liquidity_aud = 50.0         # skip markets with < $50 available
+min_matched_volume_aud = 500.0          # skip markets with < $500 matched volume
+max_lay_probability = 0.90              # block lays at odds < 1.11
+slippage_model = "linear"              # "none", "linear", or "sqrt"
+slippage_factor = 0.10                 # price impact coefficient
 
 [scanner]
 poll_interval_sec = 1800                # 30 min base timer
