@@ -26,6 +26,12 @@ kelly_base_fraction = 0.75
 kelly_hard_cap = 0.20
 lay_max_pnl_pct = 0.15
 paper_max_cost_aud = 200.0
+# Realism parameters
+min_market_liquidity_aud = 50.0
+min_matched_volume_aud = 500.0
+max_lay_probability = 0.90
+slippage_model = "linear"
+slippage_factor = 0.10
 
 [scanner]
 poll_interval_sec = 1800
@@ -39,6 +45,7 @@ betfair_max_market_age_hours = 168
 football_api = "football-data"
 football_api_base = "https://api.football-data.org/v4"
 afl_api_base = "https://api.squiggle.com.au"
+basketball_api_base = "https://v1.basketball.api-sports.io"
 cache_ttl_hours = 6
 min_data_completeness = 0.5
 

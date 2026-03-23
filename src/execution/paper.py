@@ -32,6 +32,7 @@ Escrow accounting:
 from __future__ import annotations
 
 import logging
+import math
 import random
 import uuid
 from datetime import datetime, timezone
@@ -46,6 +47,81 @@ _BASE_CONF = 100.0          # conf_score = _BASE_CONF * (1 - uncertainty_penalty
 _HALF_SPREAD = 0.01         # ±1% synthetic half-spread when real prices unavailable
 _PARTIAL_FILL_LOW = 0.60
 _PARTIAL_FILL_HIGH = 0.90
+
+
+def _depth_fill(
+    direction: Literal["back", "lay"],
+    cost: float,
+    depth_ladder: list[tuple[float, float]],
+) -> tuple[float, float]:
+    """Walk the order book ladder to determine a realistic fill.
+
+    For backs, the ladder is sorted best-first (highest back price first).
+    For lays, the ladder is sorted best-first (lowest lay price first).
+    Each entry is (decimal_odds_price, available_size_aud).
+
+    Returns:
+        (filled_fraction, vwap_probability) where filled_fraction is in [0, 1]
+        and vwap_probability is the volume-weighted average implied probability
+        of the filled portion.
+    """
+    if not depth_ladder or cost <= 0:
+        return 0.0, 0.0
+
+    remaining = cost
+    total_filled = 0.0
+    weighted_prob_sum = 0.0
+
+    for decimal_price, size_aud in depth_ladder:
+        if remaining <= 0:
+            break
+        if decimal_price <= 1.0:
+            continue  # invalid price
+        fill_at_level = min(remaining, size_aud)
+        implied_prob = 1.0 / decimal_price
+        total_filled += fill_at_level
+        weighted_prob_sum += fill_at_level * implied_prob
+        remaining -= fill_at_level
+
+    if total_filled <= 0:
+        return 0.0, 0.0
+
+    vwap_prob = weighted_prob_sum / total_filled
+    filled_fraction = total_filled / cost
+    return min(filled_fraction, 1.0), vwap_prob
+
+
+def _apply_slippage(
+    fill_price: float,
+    direction: Literal["back", "lay"],
+    cost: float,
+    available_liquidity: float,
+    model: str,
+    factor: float,
+) -> float:
+    """Apply price slippage based on order size relative to liquidity.
+
+    Back: price increases (worse for buyer).
+    Lay: price decreases (worse for seller).
+
+    Returns:
+        Slipped fill_price, clamped to [0.01, 0.99].
+    """
+    if model == "none" or factor <= 0 or available_liquidity <= 0:
+        return fill_price
+
+    ratio = cost / available_liquidity
+    if model == "sqrt":
+        impact = factor * math.sqrt(ratio)
+    else:  # "linear" (default)
+        impact = factor * ratio
+
+    if direction == "back":
+        slipped = fill_price + impact
+    else:  # lay
+        slipped = fill_price - impact
+
+    return max(0.01, min(0.99, slipped))
 
 
 def _utc_now() -> str:
@@ -117,8 +193,10 @@ class PaperBroker:
         available_liquidity: float,
         market_start_time: str | None = None,
         selection_id: int | None = None,
+        depth_ladder: list[tuple[float, float]] | None = None,
+        margin_min: float = 0.0,
     ) -> tuple[OracleState, Trade | None]:
-        """Simulate a Fill-or-Kill paper order.
+        """Simulate a Fill-or-Kill paper order with realistic fills.
 
         Args:
             state:               Current OracleState (mutated in-place and returned).
@@ -134,41 +212,77 @@ class PaperBroker:
             conf_score:          Derived from derive_conf_score().
             uncertainty_penalty: Raw LLM field (preserved for audit).
             available_liquidity: Pool size from get_market_detail().
+            depth_ladder:        Order book depth [(decimal_price, size_aud), ...].
+            margin_min:          Minimum edge threshold — trade skipped if slippage
+                                 degrades edge below this.
 
         Returns:
             (updated_state, Trade) on success.
             (unchanged_state, None) if fill is zero or bankroll insufficient.
         """
-        liquidity_floor = available_liquidity * self._cfg.risk.liquidity_safety_factor
         requested_abs = f_final * state.bankroll
 
-        if requested_abs <= liquidity_floor:
-            fill_pct = 1.0
+        # --- Depth-aware fill or fallback ---
+        if depth_ladder:
+            fill_frac, vwap_prob = _depth_fill(direction, requested_abs, depth_ladder)
+            if fill_frac <= 0:
+                logger.info(
+                    "Depth fill exhausted | market=%s dir=%s requested=%.2f — no liquidity on ladder.",
+                    market_id, direction, requested_abs,
+                )
+                return state, None
+            filled_size = f_final * fill_frac
+            # Use VWAP as the effective fill price (more realistic than top-of-book)
+            effective_price = vwap_prob
         else:
-            fill_pct = random.uniform(_PARTIAL_FILL_LOW, _PARTIAL_FILL_HIGH)
+            # Legacy fallback: binary full-or-partial
+            liquidity_floor = available_liquidity * self._cfg.risk.liquidity_safety_factor
+            if requested_abs <= liquidity_floor:
+                fill_pct = 1.0
+            else:
+                fill_pct = random.uniform(_PARTIAL_FILL_LOW, _PARTIAL_FILL_HIGH)
+            filled_size = f_final * fill_pct
+            effective_price = fill_price
 
-        filled_size = f_final * fill_pct
+        # --- Apply slippage model ---
+        cost_estimate = filled_size * state.bankroll
+        effective_price = _apply_slippage(
+            effective_price,
+            direction,
+            cost_estimate,
+            available_liquidity,
+            self._cfg.risk.slippage_model,
+            self._cfg.risk.slippage_factor,
+        )
 
-        # Compute absolute stake and liability
+        # Re-check edge after slippage — skip if edge destroyed
+        if direction == "back":
+            slipped_edge = p_fair - effective_price
+        else:
+            slipped_edge = effective_price - p_fair
+        if margin_min > 0 and slipped_edge < margin_min:
+            logger.info(
+                "Slippage killed edge | market=%s dir=%s pre=%.4f post=%.4f min=%.4f",
+                market_id, direction, fill_price, effective_price, margin_min,
+            )
+            return state, None
+
+        # Compute absolute stake and liability using effective (slipped) price
         if direction == "back":
             stake_abs = filled_size * state.bankroll
-            # For back bets, liability equals stake (we lose the stake on NO)
             liability_abs = stake_abs
         else:  # lay
             liability_abs = filled_size * state.bankroll
-            # stake_abs for a lay = what we win if lay succeeds
-            denom = (1.0 / fill_price) - 1.0
+            denom = (1.0 / effective_price) - 1.0
             if denom <= 0:
                 logger.warning(
                     "Lay fill_price=%.6f produces zero/negative denom (%.6f) — skipping trade.",
-                    fill_price, denom,
+                    effective_price, denom,
                 )
                 return state, None
             stake_abs = liability_abs / denom
 
-            # Lay stake cap: prevent stake_abs from exceeding max_pnl_pct of
-            # bankroll. Without this, laying at extreme odds (e.g. 0.99) produces
-            # stake_abs ~100× liability, so one trade can move bankroll by 500%+.
+            # Lay stake cap
             lay_max_pnl_pct = self._cfg.risk.lay_max_pnl_pct
             max_stake = state.bankroll * lay_max_pnl_pct
             if stake_abs > max_stake:
@@ -182,7 +296,7 @@ class PaperBroker:
                 liability_abs *= scale_lay
                 filled_size *= scale_lay
 
-        # Hard dollar cap per trade — second line of defence against Kelly oversizing
+        # Hard dollar cap per trade
         max_paper_cost = self._cfg.risk.paper_max_cost_aud
         cost = stake_abs if direction == "back" else liability_abs
         if cost > max_paper_cost:
@@ -216,8 +330,8 @@ class PaperBroker:
             direction=direction,
             requested_size=f_final,
             filled_size=filled_size,
-            fill_price=fill_price,
-            edge=edge,
+            fill_price=effective_price,
+            edge=slipped_edge,
             p_fair=p_fair,
             conf_score=conf_score,
             uncertainty_penalty=uncertainty_penalty,
@@ -235,7 +349,7 @@ class PaperBroker:
             market_id=market_id,
             question=question[:120],
             direction=direction,
-            entry_price=fill_price,
+            entry_price=effective_price,
             filled_size=filled_size,
             stake_abs=stake_abs,
             liability_abs=liability_abs,
@@ -244,16 +358,13 @@ class PaperBroker:
             p_fair_at_entry=p_fair,
             market_start_time=market_start_time,
             selection_id=selection_id,
-            # Seed last_seen_price so CLV is available even for positions
-            # that settle before the next scan cycle updates it.
-            last_seen_price=fill_price,
+            last_seen_price=effective_price,
         )
 
         state.bankroll = bankroll_after
         if state.bankroll > state.peak_bankroll:
             state.peak_bankroll = state.bankroll
 
-        # Batch state mutations into a single save to reduce OneDrive lock contention
         state.positions[market_id] = position
         state.trade_history.append(trade)
         self._sm.save(state)
@@ -264,8 +375,8 @@ class PaperBroker:
             market_id,
             direction,
             filled_size,
-            fill_price,
-            edge,
+            effective_price,
+            slipped_edge,
             stake_abs,
             bankroll_after,
         )

@@ -235,14 +235,18 @@ def format_stats_context(stats: MatchStats) -> str:
         lines.append(f"  Home form: {stats.home_form_pts_per_game:.1f} pts/game (last 5)")
     if stats.away_form_pts_per_game is not None:
         lines.append(f"  Away form: {stats.away_form_pts_per_game:.1f} pts/game (last 5)")
+    if stats.sport == "basketball":
+        scored_label, conceded_label = "points scored avg", "points allowed avg"
+    else:
+        scored_label, conceded_label = "goals scored avg", "goals conceded avg"
     if stats.home_goals_scored_avg is not None:
-        lines.append(f"  Home goals scored avg: {stats.home_goals_scored_avg:.2f}")
+        lines.append(f"  Home {scored_label}: {stats.home_goals_scored_avg:.2f}")
     if stats.home_goals_conceded_avg is not None:
-        lines.append(f"  Home goals conceded avg: {stats.home_goals_conceded_avg:.2f}")
+        lines.append(f"  Home {conceded_label}: {stats.home_goals_conceded_avg:.2f}")
     if stats.away_goals_scored_avg is not None:
-        lines.append(f"  Away goals scored avg: {stats.away_goals_scored_avg:.2f}")
+        lines.append(f"  Away {scored_label}: {stats.away_goals_scored_avg:.2f}")
     if stats.away_goals_conceded_avg is not None:
-        lines.append(f"  Away goals conceded avg: {stats.away_goals_conceded_avg:.2f}")
+        lines.append(f"  Away {conceded_label}: {stats.away_goals_conceded_avg:.2f}")
     if stats.home_league_position is not None:
         lines.append(f"  Home league position: {stats.home_league_position}")
     if stats.away_league_position is not None:

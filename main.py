@@ -54,8 +54,14 @@ _MAX_MARKETS_PER_CYCLE = 15
 # Betfair event type IDs for sport detection
 _EVENT_TYPE_SOCCER = "1"
 _EVENT_TYPE_AFL = "61"
+_EVENT_TYPE_BASKETBALL = "7522"
+_EVENT_TYPE_BASKETBALL_US = "7524"
+_EVENT_TYPE_BASKETBALL_OTHER = "7511"
 # Event types that have team-vs-team stats available
-_STATS_ELIGIBLE_EVENT_TYPES = {_EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL}
+_STATS_ELIGIBLE_EVENT_TYPES = {
+    _EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL,
+    _EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASKETBALL_US, _EVENT_TYPE_BASKETBALL_OTHER,
+}
 
 # Halts all new trade execution when this file exists.
 _KILL_SWITCH_PATH = Path("state/kill_switch.txt")
@@ -108,8 +114,14 @@ def _analyse_and_trade(
     match_stats = None
 
     if home_team and away_team and event_type_id in _STATS_ELIGIBLE_EVENT_TYPES:
-        sport = "afl" if event_type_id == _EVENT_TYPE_AFL else "football"
-        match_stats = get_match_stats(home_team, away_team, sport)
+        if event_type_id == _EVENT_TYPE_AFL:
+            sport = "afl"
+        elif event_type_id in {_EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASKETBALL_US, _EVENT_TYPE_BASKETBALL_OTHER}:
+            sport = "basketball"
+        else:
+            sport = "football"
+        competition = market.get("competition_name", "")
+        match_stats = get_match_stats(home_team, away_team, sport, competition=competition)
         if match_stats is not None:
             model_probs = predict_match_odds(match_stats)
             if model_probs is not None:
@@ -226,6 +238,26 @@ def _analyse_and_trade(
     p_bid = detail.get("p_lay") or PaperBroker.derive_spread(detail["probability"])[1]
     available_liquidity = detail.get("totalLiquidity", state.bankroll * 0.10)
 
+    # --- Realism gates ---
+    # A. Minimum liquidity gate
+    min_liq = settings.risk.min_market_liquidity_aud
+    if min_liq > 0 and available_liquidity < min_liq:
+        logger.info(
+            "Liquidity gate | market=%s liquidity=%.2f < min=%.2f",
+            market_id, available_liquidity, min_liq,
+        )
+        return
+
+    # B. Minimum matched volume gate
+    matched_volume = detail.get("volume", 0) or 0
+    min_vol = settings.risk.min_matched_volume_aud
+    if min_vol > 0 and matched_volume < min_vol:
+        logger.info(
+            "Volume gate | market=%s volume=%.2f < min=%.2f",
+            market_id, matched_volume, min_vol,
+        )
+        return
+
     # --- Direction selection (pick best positive edge ≥ margin_min_paper) ---
     back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
     lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")
@@ -236,6 +268,14 @@ def _analyse_and_trade(
         edge = back_edge
         q_market = p_ask
     elif lay_edge >= margin_min:
+        # C. Extreme-odds lay filter
+        max_lay_prob = settings.risk.max_lay_probability
+        if p_bid > max_lay_prob:
+            logger.info(
+                "Extreme lay gate | market=%s p_bid=%.4f > max=%.4f",
+                market_id, p_bid, max_lay_prob,
+            )
+            return
         direction = "lay"
         edge = lay_edge
         q_market = p_bid
@@ -336,6 +376,7 @@ def _analyse_and_trade(
 
     # --- Execution (paper) ---
     fill_price = p_ask if direction == "back" else p_bid
+    depth_ladder = detail.get("depth_back" if direction == "back" else "depth_lay", [])
     mst_iso = market_start_time.isoformat() if market_start_time else None
     state, trade = broker.execute(
         state=state,
@@ -353,6 +394,8 @@ def _analyse_and_trade(
         available_liquidity=available_liquidity,
         market_start_time=mst_iso,
         selection_id=selection_id,
+        depth_ladder=depth_ladder,
+        margin_min=margin_min,
     )
     if trade is not None:
         state.priors[market_id] = p_fair

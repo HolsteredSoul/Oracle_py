@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.execution.paper import PaperBroker, _BASE_CONF, _HALF_SPREAD
+from src.execution.paper import PaperBroker, _BASE_CONF, _HALF_SPREAD, _depth_fill, _apply_slippage
 from src.storage.state_manager import DEFAULT_BANKROLL, OracleState, Position, StateManager
 
 
@@ -32,6 +32,11 @@ def cfg() -> MagicMock:
     mock.risk.commission_pct = 0.05
     mock.risk.lay_max_pnl_pct = 0.15
     mock.risk.paper_max_cost_aud = 100.0
+    mock.risk.min_market_liquidity_aud = 50.0
+    mock.risk.min_matched_volume_aud = 500.0
+    mock.risk.max_lay_probability = 0.90
+    mock.risk.slippage_model = "none"
+    mock.risk.slippage_factor = 0.0
     return mock
 
 
@@ -546,5 +551,239 @@ class TestCancelPosition:
         """Cancelling a non-existent position raises KeyError."""
         with pytest.raises(KeyError):
             broker.cancel_position(fresh_state, "no-such-market")
+
+
+# ---------------------------------------------------------------------------
+# Depth fill
+# ---------------------------------------------------------------------------
+
+class TestDepthFill:
+    """Tests for _depth_fill order book ladder consumption."""
+
+    def test_full_fill_single_level(self):
+        """Order fully filled at one price level."""
+        ladder = [(2.0, 100.0)]  # decimal odds 2.0 = 50% implied, $100 available
+        frac, vwap = _depth_fill("back", 50.0, ladder)
+        assert frac == pytest.approx(1.0)
+        assert vwap == pytest.approx(0.5)  # 1/2.0
+
+    def test_partial_fill_exhausts_ladder(self):
+        """Order larger than total ladder → partial fill."""
+        ladder = [(2.0, 30.0), (1.8, 20.0)]  # $50 total available
+        frac, vwap = _depth_fill("back", 100.0, ladder)
+        assert frac == pytest.approx(0.5)  # 50/100
+        # VWAP: (30*0.5 + 20*(1/1.8)) / 50
+        expected_vwap = (30 * 0.5 + 20 * (1.0 / 1.8)) / 50
+        assert vwap == pytest.approx(expected_vwap, abs=1e-4)
+
+    def test_multi_level_vwap(self):
+        """Fill walks multiple levels, VWAP reflects weighted average."""
+        ladder = [(3.0, 40.0), (2.5, 60.0)]  # total $100
+        frac, vwap = _depth_fill("back", 100.0, ladder)
+        assert frac == pytest.approx(1.0)
+        # VWAP: (40*(1/3) + 60*(1/2.5)) / 100
+        expected = (40 * (1.0 / 3.0) + 60 * (1.0 / 2.5)) / 100
+        assert vwap == pytest.approx(expected, abs=1e-4)
+
+    def test_empty_ladder(self):
+        """Empty ladder → zero fill."""
+        frac, vwap = _depth_fill("back", 50.0, [])
+        assert frac == 0.0
+        assert vwap == 0.0
+
+    def test_zero_cost(self):
+        """Zero cost → zero fill."""
+        frac, vwap = _depth_fill("back", 0.0, [(2.0, 100.0)])
+        assert frac == 0.0
+
+    def test_invalid_prices_skipped(self):
+        """Prices at or below 1.0 are skipped."""
+        ladder = [(1.0, 50.0), (2.0, 30.0)]  # first level invalid
+        frac, vwap = _depth_fill("back", 30.0, ladder)
+        assert frac == pytest.approx(1.0)
+        assert vwap == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Slippage
+# ---------------------------------------------------------------------------
+
+class TestSlippage:
+    """Tests for _apply_slippage price impact model."""
+
+    def test_no_slippage_when_disabled(self):
+        """model='none' returns fill_price unchanged."""
+        result = _apply_slippage(0.5, "back", 100.0, 1000.0, "none", 0.1)
+        assert result == 0.5
+
+    def test_linear_back_increases_price(self):
+        """Back slippage moves price UP (worse for buyer)."""
+        result = _apply_slippage(0.5, "back", 100.0, 1000.0, "linear", 0.10)
+        assert result > 0.5
+        expected = 0.5 + 0.10 * (100.0 / 1000.0)
+        assert result == pytest.approx(expected)
+
+    def test_linear_lay_decreases_price(self):
+        """Lay slippage moves price DOWN (worse for seller)."""
+        result = _apply_slippage(0.5, "lay", 100.0, 1000.0, "linear", 0.10)
+        assert result < 0.5
+        expected = 0.5 - 0.10 * (100.0 / 1000.0)
+        assert result == pytest.approx(expected)
+
+    def test_sqrt_model(self):
+        """Sqrt model applies sqrt of ratio."""
+        import math
+        result = _apply_slippage(0.5, "back", 100.0, 1000.0, "sqrt", 0.10)
+        expected = 0.5 + 0.10 * math.sqrt(100.0 / 1000.0)
+        assert result == pytest.approx(expected)
+
+    def test_clamped_to_bounds(self):
+        """Result clamped to [0.01, 0.99]."""
+        # Extreme slippage on a back at 0.98 should clamp to 0.99
+        result = _apply_slippage(0.98, "back", 1000.0, 100.0, "linear", 1.0)
+        assert result == 0.99
+        # Extreme slippage on a lay at 0.02 should clamp to 0.01
+        result = _apply_slippage(0.02, "lay", 1000.0, 100.0, "linear", 1.0)
+        assert result == 0.01
+
+    def test_zero_liquidity_no_crash(self):
+        """Zero liquidity returns fill_price unchanged (no division by zero)."""
+        result = _apply_slippage(0.5, "back", 100.0, 0.0, "linear", 0.10)
+        assert result == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Slippage kills edge
+# ---------------------------------------------------------------------------
+
+class TestSlippageKillsEdge:
+    """Test that slippage that destroys edge skips the trade."""
+
+    @pytest.fixture()
+    def slippage_cfg(self, cfg):
+        cfg.risk.slippage_model = "linear"
+        cfg.risk.slippage_factor = 0.50  # aggressive slippage
+        return cfg
+
+    @pytest.fixture()
+    def slippage_broker(self, sm, slippage_cfg):
+        return PaperBroker(sm, slippage_cfg)
+
+    def test_slippage_kills_back_edge(self, slippage_broker, fresh_state):
+        """Back trade skipped when slippage destroys edge."""
+        state, trade = slippage_broker.execute(
+            state=fresh_state,
+            market_id="mkt-slip",
+            question="Test",
+            direction="back",
+            f_final=0.10,
+            fill_price=0.50,
+            edge=0.03,
+            p_fair=0.53,
+            kelly_f_star=0.05,
+            kelly_f_final=0.10,
+            conf_score=70.0,
+            uncertainty_penalty=0.3,
+            available_liquidity=200.0,  # low liquidity → big slippage
+            margin_min=0.03,
+        )
+        assert trade is None
+
+    def test_slippage_kills_lay_edge(self, slippage_broker, fresh_state):
+        """Lay trade skipped when slippage destroys edge."""
+        state, trade = slippage_broker.execute(
+            state=fresh_state,
+            market_id="mkt-slip-lay",
+            question="Test",
+            direction="lay",
+            f_final=0.10,
+            fill_price=0.50,
+            edge=0.03,
+            p_fair=0.47,
+            kelly_f_star=0.05,
+            kelly_f_final=0.10,
+            conf_score=70.0,
+            uncertainty_penalty=0.3,
+            available_liquidity=200.0,
+            margin_min=0.03,
+        )
+        assert trade is None
+
+
+# ---------------------------------------------------------------------------
+# Depth-aware execution integration
+# ---------------------------------------------------------------------------
+
+class TestDepthAwareExecution:
+    """Integration tests: depth ladder flows through execute()."""
+
+    def test_depth_fill_uses_vwap(self, broker, fresh_state):
+        """When depth_ladder is provided, fill_price reflects VWAP."""
+        ladder = [(2.0, 500.0), (1.8, 500.0)]  # $1000 total
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-depth",
+            question="Test",
+            direction="back",
+            f_final=0.05,
+            fill_price=0.50,
+            edge=0.05,
+            p_fair=0.55,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.3,
+            available_liquidity=1000.0,
+            depth_ladder=ladder,
+        )
+        assert trade is not None
+        # VWAP should differ from the original fill_price of 0.50
+        # since the ladder has prices at 2.0 (0.5) and 1.8 (0.556)
+        assert trade.fill_price >= 0.50
+
+    def test_empty_depth_falls_back(self, broker, fresh_state):
+        """Empty depth ladder triggers fallback fill logic."""
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-empty-depth",
+            question="Test",
+            direction="back",
+            f_final=0.05,
+            fill_price=0.50,
+            edge=0.05,
+            p_fair=0.55,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.3,
+            available_liquidity=100_000.0,
+            depth_ladder=[],
+        )
+        # Empty ladder → legacy fill. With slippage_model="none", price = 0.50
+        assert trade is not None
+        assert trade.fill_price == pytest.approx(0.50)
+
+    def test_insufficient_depth_partial_fill(self, broker, fresh_state):
+        """Shallow ladder → partial fill."""
+        ladder = [(2.0, 10.0)]  # only $10 available
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-shallow",
+            question="Test",
+            direction="back",
+            f_final=0.05,  # requests $50 from $1000 bankroll
+            fill_price=0.50,
+            edge=0.05,
+            p_fair=0.55,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.3,
+            available_liquidity=10.0,
+            depth_ladder=ladder,
+        )
+        # $10 available, $50 requested → 20% fill
+        assert trade is not None
+        assert trade.stake_abs <= 10.0 + 0.01
 
 

@@ -54,6 +54,12 @@ class RiskConfig(BaseModel):
     kelly_hard_cap: float = Field(default=0.10, gt=0, le=1.0)
     lay_max_pnl_pct: float = Field(default=0.15, gt=0, le=1.0)
     paper_max_cost_aud: float = Field(default=100.0, gt=0)
+    # Realism parameters
+    min_market_liquidity_aud: float = Field(default=50.0, ge=0)
+    min_matched_volume_aud: float = Field(default=500.0, ge=0)
+    max_lay_probability: float = Field(default=0.90, gt=0, le=1.0)
+    slippage_model: str = Field(default="linear")
+    slippage_factor: float = Field(default=0.10, ge=0)
 
 
 class ScannerConfig(BaseModel):
@@ -83,6 +89,7 @@ class StatsConfig(BaseModel):
     football_api: str = "football-data"
     football_api_base: str = "https://api.football-data.org/v4"
     afl_api_base: str = "https://api.squiggle.com.au"
+    basketball_api_base: str = "https://v1.basketball.api-sports.io"
     cache_ttl_hours: int = Field(default=6, gt=0)
     min_data_completeness: float = Field(default=0.5, ge=0, le=1.0)
 
@@ -116,6 +123,7 @@ class Settings(BaseSettings):
     newsdata_api_key: str = ""
     x_bearer_token: str = ""
     football_data_api_key: str = ""
+    basketball_api_key: str = ""
     betfair_username: str = ""
     betfair_password: str = ""
     betfair_app_key: str = ""

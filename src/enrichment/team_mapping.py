@@ -249,6 +249,11 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
         # Fuzzy match against AFL aliases
         return _fuzzy_match_aliases(betfair_name, _AFL_ALIASES, cache_key)
 
+    # 2b. Basketball — resolved directly in stats.py via API-Basketball team index.
+    # Return the original name as-is; stats.py handles its own resolution.
+    if sport == "basketball":
+        return betfair_name
+
     # 3. Football — check overrides first
     if key_lower in _FOOTBALL_OVERRIDES:
         result = _FOOTBALL_OVERRIDES[key_lower]

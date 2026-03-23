@@ -24,6 +24,9 @@ _DEFAULT_LAMBDA = 1.30
 # AFL home advantage (historical ~57%)
 _AFL_HOME_ADVANTAGE = 0.57
 
+# Basketball home-court advantage (historical ~57%, varies by league)
+_BASKETBALL_HOME_ADVANTAGE = 0.57
+
 
 def _poisson_match_probs(
     lambda_home: float,
@@ -125,6 +128,45 @@ def _predict_afl(stats: MatchStats) -> dict[str, float]:
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
+def _predict_basketball(stats: MatchStats) -> dict[str, float]:
+    """Basketball prediction using net rating differential + home-court advantage.
+
+    No draws in basketball. Uses a logistic model based on:
+      - Net rating differential (points scored - points allowed per game)
+      - Standings position differential
+      - Home-court advantage intercept
+    """
+    from scipy.special import expit
+
+    home_scored = stats.home_goals_scored_avg  # points scored per game
+    home_conceded = stats.home_goals_conceded_avg  # points allowed per game
+    away_scored = stats.away_goals_scored_avg
+    away_conceded = stats.away_goals_conceded_avg
+
+    # logit(0.57) ≈ 0.28 — home-court advantage intercept
+    logit_p = 0.28
+
+    # Primary signal: net rating differential, normalized by 20 (typical spread range)
+    if (home_scored is not None and home_conceded is not None
+            and away_scored is not None and away_conceded is not None):
+        home_net = home_scored - home_conceded
+        away_net = away_scored - away_conceded
+        net_diff = (home_net - away_net) / 20.0  # roughly [-1, 1]
+        logit_p += 1.5 * net_diff
+
+    # Secondary signal: standings position (lower = better)
+    if stats.home_league_position is not None and stats.away_league_position is not None:
+        # Positive when home is ranked higher (lower number)
+        standings_diff = (stats.away_league_position - stats.home_league_position)
+        # Normalize by a typical league size (~16-30 teams)
+        standings_diff_norm = standings_diff / 20.0
+        logit_p += 0.5 * standings_diff_norm
+
+    p_home = float(expit(logit_p))
+    p_home = max(0.05, min(0.95, p_home))
+    return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
+
+
 def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
     """Predict match outcome probabilities from statistical features.
 
@@ -144,6 +186,8 @@ def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
 
     if stats.sport == "afl":
         probs = _predict_afl(stats)
+    elif stats.sport == "basketball":
+        probs = _predict_basketball(stats)
     else:
         probs = _predict_football(stats)
 

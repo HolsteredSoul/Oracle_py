@@ -139,26 +139,50 @@ def _implied_prob(best_back_price: float | None) -> float | None:
 
 def _liquidity_from_book(
     book,
-) -> tuple[float | None, float, float | None, float | None]:
-    """Extract (probability, total_liquidity, best_back_price, best_lay_price).
+    target_selection_id: int | None = None,
+) -> tuple[
+    float | None, float, float | None, float | None,
+    list[tuple[float, float]], list[tuple[float, float]],
+]:
+    """Extract pricing, liquidity, and order-book depth from a MarketBook.
+
+    Returns:
+        (probability, total_liquidity, best_back_price, best_lay_price,
+         depth_back, depth_lay)
 
     probability      = implied prob of the first runner with a valid back price
                        in the tradeable range [PROB_FLOOR, PROB_CEIL].
                        Returns None if no valid back price exists.
     total_liquidity  = sum of all available_to_back and available_to_lay sizes
-                       across all runners at the best price level.
+                       across all runners.
     best_back_price  = real decimal odds for best back offer (first valid runner).
     best_lay_price   = real decimal odds for best lay offer (first valid runner).
+    depth_back       = [(decimal_price, size), ...] for the target runner, sorted
+                       best-first (highest price first for backs).
+    depth_lay        = [(decimal_price, size), ...] for the target runner, sorted
+                       best-first (lowest price first for lays).
     """
     prob: float | None = None
     total_liquidity = 0.0
     best_back_price: float | None = None
     best_lay_price: float | None = None
+    depth_back: list[tuple[float, float]] = []
+    depth_lay: list[tuple[float, float]] = []
+
+    # Identify the target runner for depth extraction
+    target_runner_ex = None
 
     for runner in book.runners or []:
         ex = runner.ex
         if ex is None:
             continue
+        # Track target runner for depth data
+        if target_selection_id is not None:
+            if getattr(runner, "selection_id", None) == target_selection_id:
+                target_runner_ex = ex
+        elif target_runner_ex is None:
+            target_runner_ex = ex  # fallback: first runner
+
         if ex.available_to_back:
             total_liquidity += sum(o.size for o in ex.available_to_back)
             if prob is None:
@@ -174,7 +198,20 @@ def _liquidity_from_book(
                 if lp > 1.0:
                     best_lay_price = lp
 
-    return prob, total_liquidity, best_back_price, best_lay_price
+    # Extract full depth ladder for the target runner
+    if target_runner_ex is not None:
+        if target_runner_ex.available_to_back:
+            depth_back = [
+                (o.price, o.size)
+                for o in target_runner_ex.available_to_back
+            ]
+        if target_runner_ex.available_to_lay:
+            depth_lay = [
+                (o.price, o.size)
+                for o in target_runner_ex.available_to_lay
+            ]
+
+    return prob, total_liquidity, best_back_price, best_lay_price, depth_back, depth_lay
 
 
 def _market_url(market_id: str) -> str:
@@ -251,6 +288,7 @@ def get_markets(
             "EVENT",
             "EVENT_TYPE",
             "MARKET_DESCRIPTION",
+            "COMPETITION",
         ],
         max_results=min(limit * 3, 200),  # cap to avoid excessive batches
     )
@@ -298,7 +336,7 @@ def get_markets(
                 )
                 continue
 
-        prob, total_liquidity, best_back_price, best_lay_price = _liquidity_from_book(book)
+        prob, total_liquidity, best_back_price, best_lay_price, _db, _dl = _liquidity_from_book(book)
 
         # prob is None when no back price falls in [PROB_FLOOR, PROB_CEIL]
         if prob is None or not (prob_low <= prob <= prob_high):
@@ -313,6 +351,10 @@ def get_markets(
         # Event type ID for sport detection (1=Soccer, 61=AFL, 2=Tennis, etc.)
         _event_type = getattr(cat, "event_type", None)
         event_type_id = (getattr(_event_type, "id", None) if _event_type else None) or ""
+
+        # Competition name for league resolution (e.g. "NBA", "EuroLeague", "ACB")
+        _comp = getattr(cat, "competition", None)
+        competition_name = (getattr(_comp, "name", None) if _comp else None) or ""
 
         # Parse home/away teams from event name (e.g. "Sydney FC v Melbourne Victory")
         teams = parse_teams_from_event(event_name)
@@ -370,6 +412,7 @@ def get_markets(
             "home_team": home_team,
             "away_team": away_team,
             "event_type_id": str(event_type_id),
+            "competition_name": competition_name,
             "selection_id": selection_id,
         })
 
@@ -443,7 +486,7 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         )
         books = client.betting.list_market_book(
             market_ids=[market_id],
-            price_projection=price_projection(price_data=["EX_BEST_OFFERS"]),
+            price_projection=price_projection(price_data=["EX_ALL_OFFERS"]),
         )
     except Exception as exc:
         if retry:
@@ -466,15 +509,6 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
     is_resolved = status in _RESOLVED_STATUSES
     total_matched = getattr(book, "total_matched", 0.0) or 0.0
 
-    prob, total_liquidity, best_back_price, best_lay_price = _liquidity_from_book(book)
-    # raw_probability is None when the order book is empty (e.g. market suspended).
-    # Callers that need a real market price (CLV tracking) should use raw_probability
-    # and ignore None values rather than treating the 0.5 fallback as real.
-    raw_probability = prob
-    # Fall back to 0.5 for detail calls — caller uses this as settlement price
-    if prob is None:
-        prob = 0.5
-
     _event = getattr(cat, "event", None) if cat else None
     event_name = (getattr(_event, "name", None) if _event else None) or ""
     market_name = (getattr(cat, "market_name", None) if cat else None) or market_id
@@ -490,6 +524,18 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
     if _runners:
         runner_name = getattr(_runners[0], "runner_name", "") or ""
         selection_id = getattr(_runners[0], "selection_id", None)
+
+    # Extract liquidity and depth for the target runner
+    prob, total_liquidity, best_back_price, best_lay_price, depth_back, depth_lay = (
+        _liquidity_from_book(book, target_selection_id=selection_id)
+    )
+    # raw_probability is None when the order book is empty (e.g. market suspended).
+    # Callers that need a real market price (CLV tracking) should use raw_probability
+    # and ignore None values rather than treating the 0.5 fallback as real.
+    raw_probability = prob
+    # Fall back to 0.5 for detail calls — caller uses this as settlement price
+    if prob is None:
+        prob = 0.5
 
     if runner_name:
         name = (
@@ -550,4 +596,6 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         "selection_id": selection_id,
         "market_start_time": start_dt,
         "raw_probability": raw_probability,
+        "depth_back": depth_back,
+        "depth_lay": depth_lay,
     }
