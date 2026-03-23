@@ -258,6 +258,25 @@ def _analyse_and_trade(
         )
         return
 
+    # C2. In-play safety gate — reject trades on in-play markets
+    if not settings.risk.allow_in_play and detail.get("inplay"):
+        logger.info(
+            "In-play gate | market=%s — skipping (no in-play engine)",
+            market_id,
+        )
+        return
+
+    # C3. Crossed-book detection — stale/suspended data
+    if settings.risk.reject_crossed_book:
+        bb = detail.get("best_back_price")
+        bl = detail.get("best_lay_price")
+        if bb is not None and bl is not None and bb > bl:
+            logger.info(
+                "Crossed book gate | market=%s best_back=%.2f > best_lay=%.2f — stale data",
+                market_id, bb, bl,
+            )
+            return
+
     # --- Direction selection (pick best positive edge ≥ margin_min_paper) ---
     back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
     lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")

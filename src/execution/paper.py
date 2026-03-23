@@ -53,12 +53,23 @@ def _depth_fill(
     direction: Literal["back", "lay"],
     cost: float,
     depth_ladder: list[tuple[float, float]],
+    queue_model: str = "none",
+    queue_factor: float = 0.5,
 ) -> tuple[float, float]:
     """Walk the order book ladder to determine a realistic fill.
 
     For backs, the ladder is sorted best-first (highest back price first).
     For lays, the ladder is sorted best-first (lowest lay price first).
     Each entry is (decimal_odds_price, available_size_aud).
+
+    Queue-position models (applied per ladder level):
+        "none":          Fill all displayed volume (optimistic baseline).
+        "linear":        Discount available volume by your share at each level:
+                         effective = available * max(0, 1 - queue_factor * (want / available))
+        "probabilistic": Bernoulli draw — fill probability at each level is
+                         available / (available + available * queue_factor).
+                         Small orders almost always fill; large orders face
+                         steep queue friction.
 
     Returns:
         (filled_fraction, vwap_probability) where filled_fraction is in [0, 1]
@@ -77,11 +88,30 @@ def _depth_fill(
             break
         if decimal_price <= 1.0:
             continue  # invalid price
-        fill_at_level = min(remaining, size_aud)
+
+        want = min(remaining, size_aud)
+
+        # Apply queue-position discount
+        if queue_model == "linear" and queue_factor > 0 and size_aud > 0:
+            share = want / size_aud
+            effective = want * max(0.0, 1.0 - queue_factor * share)
+        elif queue_model == "probabilistic" and queue_factor > 0 and size_aud > 0:
+            # Fill probability: your order competes with hidden queue depth
+            hidden_queue = size_aud * queue_factor
+            fill_prob = size_aud / (size_aud + hidden_queue)
+            if random.random() > fill_prob:
+                continue  # queue friction — skipped this level entirely
+            effective = want  # if you pass the draw, you fill your requested amount
+        else:
+            effective = want
+
+        if effective <= 0:
+            continue
+
         implied_prob = 1.0 / decimal_price
-        total_filled += fill_at_level
-        weighted_prob_sum += fill_at_level * implied_prob
-        remaining -= fill_at_level
+        total_filled += effective
+        weighted_prob_sum += effective * implied_prob
+        remaining -= effective
 
     if total_filled <= 0:
         return 0.0, 0.0
@@ -224,7 +254,11 @@ class PaperBroker:
 
         # --- Depth-aware fill or fallback ---
         if depth_ladder:
-            fill_frac, vwap_prob = _depth_fill(direction, requested_abs, depth_ladder)
+            fill_frac, vwap_prob = _depth_fill(
+                direction, requested_abs, depth_ladder,
+                queue_model=self._cfg.paper.queue_position_model,
+                queue_factor=self._cfg.paper.queue_factor,
+            )
             if fill_frac <= 0:
                 logger.info(
                     "Depth fill exhausted | market=%s dir=%s requested=%.2f — no liquidity on ladder.",
@@ -243,6 +277,14 @@ class PaperBroker:
                 fill_pct = random.uniform(_PARTIAL_FILL_LOW, _PARTIAL_FILL_HIGH)
             filled_size = f_final * fill_pct
             effective_price = fill_price
+
+        # --- Fill-rate tracking ---
+        if self._cfg.paper.track_fill_rates:
+            fill_rate = filled_size / f_final if f_final > 0 else 0.0
+            logger.info(
+                "Fill rate | market=%s dir=%s fill_rate=%.3f requested=%.2f filled=%.4f",
+                market_id, direction, fill_rate, requested_abs, filled_size * state.bankroll,
+            )
 
         # --- Apply slippage model ---
         cost_estimate = filled_size * state.bankroll

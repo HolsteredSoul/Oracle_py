@@ -598,4 +598,5 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         "raw_probability": raw_probability,
         "depth_back": depth_back,
         "depth_lay": depth_lay,
+        "inplay": getattr(book, "inplay", False) or False,
     }

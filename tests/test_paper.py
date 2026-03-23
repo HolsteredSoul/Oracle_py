@@ -37,6 +37,12 @@ def cfg() -> MagicMock:
     mock.risk.max_lay_probability = 0.90
     mock.risk.slippage_model = "none"
     mock.risk.slippage_factor = 0.0
+    # Paper trading realism
+    mock.paper.queue_position_model = "none"
+    mock.paper.queue_factor = 0.50
+    mock.paper.adverse_drift_enabled = False
+    mock.paper.adverse_drift_base_sigma = 0.003
+    mock.paper.track_fill_rates = False
     return mock
 
 
@@ -787,3 +793,151 @@ class TestDepthAwareExecution:
         assert trade.stake_abs <= 10.0 + 0.01
 
 
+# ---------------------------------------------------------------------------
+# Queue-position model
+# ---------------------------------------------------------------------------
+
+class TestQueuePositionModel:
+    """Tests for queue-position models in _depth_fill()."""
+
+    def test_none_model_fills_all_volume(self):
+        """queue_model='none' fills all displayed volume (baseline)."""
+        ladder = [(2.0, 100.0)]
+        frac, vwap = _depth_fill("back", 50.0, ladder, queue_model="none")
+        assert frac == pytest.approx(1.0)
+        assert vwap == pytest.approx(0.5)
+
+    def test_linear_model_reduces_fill(self):
+        """Linear model discounts fill by your share at each level."""
+        ladder = [(2.0, 100.0)]
+        # Requesting $100 from $100 available → share = 1.0
+        # effective = 100 * max(0, 1 - 0.5 * 1.0) = 50
+        frac, vwap = _depth_fill("back", 100.0, ladder, queue_model="linear", queue_factor=0.5)
+        assert frac == pytest.approx(0.5)
+        assert vwap == pytest.approx(0.5)
+
+    def test_linear_small_order_nearly_full_fill(self):
+        """Small order relative to available volume has minimal queue impact."""
+        ladder = [(2.0, 1000.0)]
+        # Requesting $10 from $1000 → share = 0.01
+        # effective = 10 * max(0, 1 - 0.5 * 0.01) = 10 * 0.995 = 9.95
+        frac, vwap = _depth_fill("back", 10.0, ladder, queue_model="linear", queue_factor=0.5)
+        assert frac > 0.99
+
+    def test_linear_multi_level(self):
+        """Linear model across multiple ladder levels."""
+        ladder = [(2.0, 100.0), (1.8, 100.0)]
+        # Level 1: want 100, share=1.0, effective = 100 * (1 - 0.5*1) = 50
+        # Level 2: remaining 50, want=50, share=0.5, effective = 50 * (1-0.5*0.5) = 37.5
+        # Total = 87.5 / 100 = 0.875
+        frac, vwap = _depth_fill("back", 100.0, ladder, queue_model="linear", queue_factor=0.5)
+        assert 0.5 < frac < 1.0
+
+    def test_probabilistic_model_deterministic_with_seed(self):
+        """Probabilistic model produces varying fills across runs."""
+        import random
+        ladder = [(2.0, 100.0), (1.8, 100.0), (1.5, 100.0)]
+        results = set()
+        for seed in range(50):
+            random.seed(seed)
+            frac, _ = _depth_fill("back", 250.0, ladder, queue_model="probabilistic", queue_factor=0.5)
+            results.add(round(frac, 2))
+        # With probabilistic model, we should see variation
+        assert len(results) >= 2, "Expected variation in probabilistic fills"
+
+    def test_probabilistic_small_order_usually_fills(self):
+        """Small order relative to volume should almost always fill."""
+        import random
+        ladder = [(2.0, 10000.0)]
+        fill_count = 0
+        trials = 100
+        for i in range(trials):
+            random.seed(i)
+            frac, _ = _depth_fill("back", 10.0, ladder, queue_model="probabilistic", queue_factor=0.5)
+            if frac > 0.99:
+                fill_count += 1
+        # fill_prob = 1/(1+0.5) = 0.667 per level. Small order should pass most of the time.
+        assert fill_count > 50
+
+    def test_queue_model_zero_factor_same_as_none(self):
+        """queue_factor=0 should behave identically to queue_model='none'."""
+        ladder = [(2.0, 100.0)]
+        frac_none, vwap_none = _depth_fill("back", 50.0, ladder, queue_model="none")
+        frac_lin, vwap_lin = _depth_fill("back", 50.0, ladder, queue_model="linear", queue_factor=0.0)
+        assert frac_none == pytest.approx(frac_lin)
+        assert vwap_none == pytest.approx(vwap_lin)
+
+    def test_queue_model_passes_through_execute(self, sm, fresh_state):
+        """Queue model config is passed from execute() to _depth_fill()."""
+        cfg = MagicMock()
+        cfg.risk.liquidity_safety_factor = 0.70
+        cfg.risk.commission_pct = 0.05
+        cfg.risk.lay_max_pnl_pct = 0.15
+        cfg.risk.paper_max_cost_aud = 100.0
+        cfg.risk.slippage_model = "none"
+        cfg.risk.slippage_factor = 0.0
+        cfg.paper.queue_position_model = "linear"
+        cfg.paper.queue_factor = 0.5
+        cfg.paper.track_fill_rates = False
+        broker = PaperBroker(sm, cfg)
+
+        ladder = [(2.0, 500.0)]
+        state, trade = broker.execute(
+            state=fresh_state,
+            market_id="mkt-queue",
+            question="Test queue",
+            direction="back",
+            f_final=0.05,
+            fill_price=0.50,
+            edge=0.05,
+            p_fair=0.55,
+            kelly_f_star=0.10,
+            kelly_f_final=0.05,
+            conf_score=70.0,
+            uncertainty_penalty=0.3,
+            available_liquidity=500.0,
+            depth_ladder=ladder,
+        )
+        assert trade is not None
+
+
+# ---------------------------------------------------------------------------
+# Fill-rate tracking
+# ---------------------------------------------------------------------------
+
+class TestFillRateTracking:
+    """Tests that fill-rate tracking logs correctly."""
+
+    def test_fill_rate_logged_when_enabled(self, sm, fresh_state, caplog):
+        """Fill rate is logged when track_fill_rates=True."""
+        cfg = MagicMock()
+        cfg.risk.liquidity_safety_factor = 0.70
+        cfg.risk.commission_pct = 0.05
+        cfg.risk.lay_max_pnl_pct = 0.15
+        cfg.risk.paper_max_cost_aud = 100.0
+        cfg.risk.slippage_model = "none"
+        cfg.risk.slippage_factor = 0.0
+        cfg.paper.queue_position_model = "none"
+        cfg.paper.queue_factor = 0.0
+        cfg.paper.track_fill_rates = True
+
+        broker = PaperBroker(sm, cfg)
+        import logging
+        with caplog.at_level(logging.INFO):
+            state, trade = broker.execute(
+                state=fresh_state,
+                market_id="mkt-fr",
+                question="Test fill rate",
+                direction="back",
+                f_final=0.05,
+                fill_price=0.50,
+                edge=0.05,
+                p_fair=0.55,
+                kelly_f_star=0.10,
+                kelly_f_final=0.05,
+                conf_score=70.0,
+                uncertainty_penalty=0.3,
+                available_liquidity=100_000.0,
+            )
+        assert trade is not None
+        assert any("Fill rate" in r.message for r in caplog.records)

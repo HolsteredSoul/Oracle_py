@@ -32,6 +32,10 @@ min_matched_volume_aud = 500.0
 max_lay_probability = 0.90
 slippage_model = "linear"
 slippage_factor = 0.10
+# In-play safety gate — reject trades on in-play markets
+allow_in_play = false
+# Crossed-book detection — skip if best_back < best_lay (stale/suspended data)
+reject_crossed_book = true
 
 [scanner]
 poll_interval_sec = 1800
@@ -48,6 +52,21 @@ afl_api_base = "https://api.squiggle.com.au"
 basketball_api_base = "https://v1.basketball.api-sports.io"
 cache_ttl_hours = 6
 min_data_completeness = 0.5
+
+[paper]
+# Queue-position model: simulates order queue friction in _depth_fill()
+# "none" = fill all displayed volume (optimistic)
+# "linear" = discount each level linearly by your share
+# "probabilistic" = Bernoulli draw per level (most realistic)
+queue_position_model = "probabilistic"
+queue_factor = 0.50          # hidden queue depth as fraction of visible volume
+
+# Post-fill adverse drift (disabled by default — risk of double-counting with slippage)
+adverse_drift_enabled = false
+adverse_drift_base_sigma = 0.003
+
+# Realism tracking
+track_fill_rates = true      # log filled_fraction for calibration
 
 [betfair]
 # Phase 4 only — leave empty during paper trading

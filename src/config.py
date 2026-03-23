@@ -60,6 +60,8 @@ class RiskConfig(BaseModel):
     max_lay_probability: float = Field(default=0.90, gt=0, le=1.0)
     slippage_model: str = Field(default="linear")
     slippage_factor: float = Field(default=0.10, ge=0)
+    allow_in_play: bool = False
+    reject_crossed_book: bool = True
 
 
 class ScannerConfig(BaseModel):
@@ -94,6 +96,24 @@ class StatsConfig(BaseModel):
     min_data_completeness: float = Field(default=0.5, ge=0, le=1.0)
 
 
+class PaperConfig(BaseModel):
+    """Paper-trading realism simulation parameters."""
+
+    queue_position_model: str = Field(default="probabilistic")
+    queue_factor: float = Field(default=0.50, ge=0, le=2.0)
+    adverse_drift_enabled: bool = False
+    adverse_drift_base_sigma: float = Field(default=0.003, ge=0)
+    track_fill_rates: bool = True
+
+    @field_validator("queue_position_model")
+    @classmethod
+    def validate_queue_model(cls, v: str) -> str:
+        allowed = {"none", "linear", "probabilistic"}
+        if v not in allowed:
+            raise ValueError(f"queue_position_model must be one of {allowed}, got {v!r}")
+        return v
+
+
 class BetfairConfig(BaseModel):
     """Betfair exchange settings (Phase 6 only)."""
 
@@ -116,6 +136,7 @@ class Settings(BaseSettings):
     risk: RiskConfig
     scanner: ScannerConfig
     stats: StatsConfig = StatsConfig()
+    paper: PaperConfig = PaperConfig()
     betfair: BetfairConfig
 
     # Secrets loaded from environment variables

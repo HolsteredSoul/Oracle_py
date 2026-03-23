@@ -462,6 +462,88 @@ def render_trade_log(trade_history: list[dict]) -> None:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def render_realism_panel() -> None:
+    """Phase 4C: Paper-trading realism feature checklist."""
+    st.subheader("Paper Trading Realism")
+
+    # Load config to check feature status
+    config_path = Path("config.toml")
+    features: list[dict] = []
+    if config_path.exists():
+        try:
+            import toml as _toml
+            raw = _toml.load(config_path)
+            paper = raw.get("paper", {})
+            risk = raw.get("risk", {})
+
+            qm = paper.get("queue_position_model", "none")
+            features = [
+                {
+                    "feature": "Depth-aware VWAP fills",
+                    "status": True,
+                    "detail": "EX_ALL_OFFERS ladder walk",
+                },
+                {
+                    "feature": "Slippage model",
+                    "status": risk.get("slippage_model", "none") != "none",
+                    "detail": f"{risk.get('slippage_model', 'none')} (factor={risk.get('slippage_factor', 0)})",
+                },
+                {
+                    "feature": "Edge re-check post-slippage",
+                    "status": True,
+                    "detail": "Abort if slipped_edge < margin_min",
+                },
+                {
+                    "feature": "Queue-position model",
+                    "status": qm != "none",
+                    "detail": f"{qm} (factor={paper.get('queue_factor', 0)})",
+                },
+                {
+                    "feature": "In-play safety gate",
+                    "status": not risk.get("allow_in_play", True),
+                    "detail": "Blocks in-play markets",
+                },
+                {
+                    "feature": "Crossed-book detection",
+                    "status": risk.get("reject_crossed_book", False),
+                    "detail": "Rejects stale/suspended data",
+                },
+                {
+                    "feature": "Fill-rate tracking",
+                    "status": paper.get("track_fill_rates", False),
+                    "detail": "Logs filled_fraction for calibration",
+                },
+                {
+                    "feature": "Stochastic partial fills",
+                    "status": True,
+                    "detail": "[60%, 90%] when exceeds liquidity",
+                },
+            ]
+        except Exception:
+            pass
+
+    if not features:
+        st.info("Could not load config.toml — realism checklist unavailable.")
+        return
+
+    enabled_count = sum(1 for f in features if f["status"])
+    total = len(features)
+    score = round(enabled_count / total * 10, 1) if total > 0 else 0
+
+    col1, col2 = st.columns(2)
+    col1.metric("Realism Score", f"{score}/10")
+    col2.metric("Features Enabled", f"{enabled_count}/{total}")
+
+    rows = []
+    for f in features:
+        rows.append({
+            "Status": "ON" if f["status"] else "OFF",
+            "Feature": f["feature"],
+            "Detail": f["detail"],
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def render_llm_cost_panel(spend: dict) -> None:
     """Panel 7: LLM cost — today's spend vs daily cap."""
     st.subheader("LLM Cost")
@@ -559,6 +641,7 @@ def main() -> None:
     st.divider()
 
     render_llm_cost_panel(spend)
+    render_realism_panel()       # Phase 4C
 
     # --- Auto-refresh ---
     time.sleep(_REFRESH_INTERVAL_SEC)
