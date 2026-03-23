@@ -95,12 +95,19 @@ def _trade_entry_cost(t: dict) -> float:
     return t.get("stake_abs", 0)
 
 
-def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> pd.DataFrame:
+def compute_equity_curve(
+    trade_history: list[dict],
+    initial_bankroll: float,
+    current_equity: float | None = None,
+) -> pd.DataFrame:
     """Reconstruct equity curve from trade history.
 
     Equity = cash (bankroll_after) + capital deployed in open positions.
     Each trade entry deploys capital; each settlement returns it (± P&L).
     This tracks total equity, not just cash on hand.
+
+    If *current_equity* is provided, a "now" data-point is appended so the
+    graph endpoint always matches the live top-line metric.
     """
     # Build a chronological event stream of entries and settlements
     events: list[dict] = []
@@ -132,6 +139,14 @@ def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> 
             equity += ev["pnl"]
         rows.append({"timestamp": ev["timestamp"], "equity": equity})
 
+    # Pin the graph endpoint to the live metric so it never drifts from the
+    # top-line Equity number due to rounding or state resets.
+    if current_equity is not None:
+        rows.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "equity": current_equity,
+        })
+
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
@@ -139,11 +154,18 @@ def compute_equity_curve(trade_history: list[dict], initial_bankroll: float) -> 
     return df
 
 
-def compute_cash_curve(trade_history: list[dict], initial_bankroll: float) -> pd.DataFrame:
+def compute_cash_curve(
+    trade_history: list[dict],
+    initial_bankroll: float,
+    current_cash: float | None = None,
+) -> pd.DataFrame:
     """Reconstruct cash (bankroll) curve from trade history.
 
     Cash drops on entry (escrow) and returns on settlement (cost + P&L).
     This is the actual bankroll trajectory, not total equity.
+
+    If *current_cash* is provided, a "now" data-point is appended so the
+    graph endpoint always matches the live Cash metric.
     """
     events: list[dict] = []
     for t in trade_history:
@@ -158,6 +180,13 @@ def compute_cash_curve(trade_history: list[dict], initial_bankroll: float) -> pd
     for ev in sorted(events, key=lambda e: e["timestamp"]):
         cash += ev["delta"]
         rows.append({"timestamp": ev["timestamp"], "cash": cash})
+
+    # Pin the graph endpoint to the live Cash metric.
+    if current_cash is not None:
+        rows.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "cash": current_cash,
+        })
 
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], format="ISO8601", errors="coerce", utc=True)
@@ -504,9 +533,14 @@ def main() -> None:
     st.divider()
 
     # --- Charts ---
-    initial_bankroll = 1000.0  # DEFAULT_BANKROLL
-    equity_df = compute_equity_curve(trade_history, initial_bankroll)
-    cash_df = compute_cash_curve(trade_history, initial_bankroll)
+    # Derive initial bankroll from the first trade's pre-entry bankroll so the
+    # curve stays correct even after state resets or non-default starting values.
+    if trade_history:
+        initial_bankroll = trade_history[0].get("bankroll_before", bankroll)
+    else:
+        initial_bankroll = bankroll
+    equity_df = compute_equity_curve(trade_history, initial_bankroll, current_equity=equity)
+    cash_df = compute_cash_curve(trade_history, initial_bankroll, current_cash=bankroll)
 
     left, right = st.columns(2)
     with left:

@@ -244,6 +244,9 @@ class PaperBroker:
             p_fair_at_entry=p_fair,
             market_start_time=market_start_time,
             selection_id=selection_id,
+            # Seed last_seen_price so CLV is available even for positions
+            # that settle before the next scan cycle updates it.
+            last_seen_price=fill_price,
         )
 
         state.bankroll = bankroll_after

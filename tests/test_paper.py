@@ -530,15 +530,17 @@ class TestCancelPosition:
         # back CLV = closing_price - entry_price = 0.55 - 0.50 = 0.05
         assert cancelled.clv == pytest.approx(0.05, abs=1e-5)
 
-    def test_cancel_clv_none_when_no_last_seen(self, broker, fresh_state):
-        """CLV stays None when last_seen_price was never set."""
+    def test_cancel_clv_uses_seeded_last_seen_price(self, broker, fresh_state):
+        """CLV uses the seeded last_seen_price (= fill_price) when no scan has updated it."""
         state, _ = _execute_back(broker, fresh_state, market_id="mkt-c6")
-        assert state.positions["mkt-c6"].last_seen_price is None
+        # last_seen_price is now seeded to fill_price at creation time
+        assert state.positions["mkt-c6"].last_seen_price == pytest.approx(0.5, abs=1e-5)
 
         state, cancelled = broker.cancel_position(state, "mkt-c6")
 
-        assert cancelled.closing_price is None
-        assert cancelled.clv is None
+        # closing_price = seeded fill_price, so CLV = 0.5 - 0.5 = 0
+        assert cancelled.closing_price == pytest.approx(0.5, abs=1e-5)
+        assert cancelled.clv == pytest.approx(0.0, abs=1e-5)
 
     def test_cancel_nonexistent_raises(self, broker, fresh_state):
         """Cancelling a non-existent position raises KeyError."""

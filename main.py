@@ -213,10 +213,13 @@ def _analyse_and_trade(
         logger.debug("Market %s already resolved — skipping.", market_id)
         return
 
-    # Phase 5A.1: update last_seen_price for CLV tracking on open positions
+    # Phase 5A.1: update last_seen_price for CLV tracking on open positions.
+    # Use raw_probability (None when book is empty/suspended) to avoid writing
+    # the 0.5 fallback as if it were a real closing price.
     if market_id in state.positions:
-        current_prob = detail.get("probability", mid_price)
-        state.positions[market_id].last_seen_price = current_prob
+        raw_prob = detail.get("raw_probability")
+        if raw_prob is not None:
+            state.positions[market_id].last_seen_price = raw_prob
 
     # Use real Betfair back/lay prices where available; fall back to synthetic spread.
     p_ask = detail.get("p_back") or PaperBroker.derive_spread(detail["probability"])[0]
@@ -414,9 +417,10 @@ def _settle_betfair_positions(
 
         # Phase 5A.1: always update last_seen_price while market is still open.
         # This becomes the closing_price approximation at settlement.
-        current_prob = detail.get("probability")
-        if current_prob is not None and not detail.get("isResolved"):
-            state.positions[market_id].last_seen_price = current_prob
+        # Use raw_probability to avoid writing the 0.5 fallback as a real price.
+        raw_prob = detail.get("raw_probability")
+        if raw_prob is not None and not detail.get("isResolved"):
+            state.positions[market_id].last_seen_price = raw_prob
 
         # Backfill market_start_time for positions opened before this field existed
         mst = detail.get("market_start_time")

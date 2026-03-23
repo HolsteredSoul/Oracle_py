@@ -467,6 +467,10 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
     total_matched = getattr(book, "total_matched", 0.0) or 0.0
 
     prob, total_liquidity, best_back_price, best_lay_price = _liquidity_from_book(book)
+    # raw_probability is None when the order book is empty (e.g. market suspended).
+    # Callers that need a real market price (CLV tracking) should use raw_probability
+    # and ignore None values rather than treating the 0.5 fallback as real.
+    raw_probability = prob
     # Fall back to 0.5 for detail calls — caller uses this as settlement price
     if prob is None:
         prob = 0.5
@@ -545,4 +549,5 @@ def _fetch_market_detail(market_id: str, retry: bool = True) -> dict:
         "runner_status": raw_runner_status,
         "selection_id": selection_id,
         "market_start_time": start_dt,
+        "raw_probability": raw_probability,
     }
