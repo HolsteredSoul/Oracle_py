@@ -366,6 +366,16 @@ class PaperBroker:
             else:  # lay
                 clv = round(entry_price - closing_price, 6)
 
+        # For binary resolutions, use the actual outcome as exit_price
+        # rather than the raw resolution_probability (which may be a 0.5 fallback
+        # from an empty order book on a resolved market).
+        if resolution == "YES":
+            exit_price = 1.0
+        elif resolution == "NO":
+            exit_price = 0.0
+        else:
+            exit_price = resolution_probability  # MKT/VOID: keep the interpolated value
+
         # Find and update the Trade record in history
         settled_trade: Trade | None = None
         for i, t in enumerate(state.trade_history):
@@ -373,7 +383,7 @@ class PaperBroker:
                 # Rebuild as new object (Pydantic v2 models are mutable but let's be explicit)
                 updated = t.model_copy(update={
                     "status": "settled",
-                    "exit_price": resolution_probability,
+                    "exit_price": exit_price,
                     "pnl": round(pnl, 4),
                     "exit_timestamp": exit_ts,
                     "commission_paid": round(commission_paid, 4),
