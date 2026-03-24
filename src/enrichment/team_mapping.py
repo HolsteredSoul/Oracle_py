@@ -114,8 +114,8 @@ _AFL_ALIASES: dict[str, str] = {
 _resolved_cache: dict[tuple[str, str], str] = {}
 
 
-def _normalize(name: str) -> str:
-    """Normalize a team name for comparison."""
+def normalize_team_name(name: str) -> str:
+    """Normalize a team name for comparison (strip FC/AFC/SC suffixes, lowercase)."""
     n = name.lower().strip()
     for suffix in (" fc", " afc", " sc"):
         if n.endswith(suffix):
@@ -164,9 +164,9 @@ def _parse_perplexity_team_response(
     if line.lower() in index:
         return _canonical_from_index(line.lower(), index)
     # Normalized match (strip FC/AFC/SC)
-    norm = _normalize(line)
+    norm = normalize_team_name(line)
     for idx_key in index:
-        if _normalize(idx_key) == norm:
+        if normalize_team_name(idx_key) == norm:
             return _canonical_from_index(idx_key, index)
     return None
 
@@ -277,9 +277,9 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
         return canonical
 
     # 4b. Normalized match (strip FC/AFC/SC suffixes)
-    normalized = _normalize(betfair_name)
+    normalized = normalize_team_name(betfair_name)
     for idx_key in index:
-        if _normalize(idx_key) == normalized:
+        if normalize_team_name(idx_key) == normalized:
             canonical = _canonical_from_index(idx_key, index)
             _resolved_cache[cache_key] = canonical
             logger.debug(
@@ -292,7 +292,7 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
     best_key: str | None = None
 
     for idx_key in index:
-        score = SequenceMatcher(None, normalized, _normalize(idx_key)).ratio()
+        score = SequenceMatcher(None, normalized, normalize_team_name(idx_key)).ratio()
         if score > best_score:
             best_score = score
             best_key = idx_key
@@ -325,12 +325,12 @@ def _fuzzy_match_aliases(
     cache_key: tuple[str, str],
 ) -> str | None:
     """Fuzzy match against an alias dict. Used for AFL."""
-    normalized = _normalize(betfair_name)
+    normalized = normalize_team_name(betfair_name)
     best_score = 0.0
     best_match: str | None = None
 
     for alias_key, canonical in aliases.items():
-        score = SequenceMatcher(None, normalized, _normalize(alias_key)).ratio()
+        score = SequenceMatcher(None, normalized, normalize_team_name(alias_key)).ratio()
         if score > best_score:
             best_score = score
             best_match = canonical
