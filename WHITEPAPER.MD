@@ -3,7 +3,7 @@
 **v1.0.0 – Live Betfair Hardened, Execution-Ready Blueprint**
 **Autonomous Profit-Maximizing Prediction-Market Agent**
 **March 2026**
-**Author:** Pierre (@bandersbase)
+**Author:** Pierre 
 **Scope:** Betfair Australia paper trading (safe tuning & validation) → Betfair Australia live (real-money execution)
 
 ---
