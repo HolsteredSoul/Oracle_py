@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 _NEWSDATA_URL = "https://newsdata.io/api/1/news"
 _GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 _TIMEOUT = 10.0
-_CACHE_TTL = 3600.0  # 1 hour
-_NEWSDATA_MAX_PER_MIN = 5  # conservative; free tier allows ~10/min
+_CACHE_TTL = 7200.0  # 2 hours — reduce API calls for same-event queries
+_NEWSDATA_MAX_PER_MIN = 3  # aggressive; free tier advertises ~10/min but 429s at 5
 
 # In-memory cache: query -> (fetched_at_unix, summary_str)
 _cache: dict[str, tuple[float, str]] = {}
@@ -163,6 +163,10 @@ def _newsdata_rate_limit() -> None:
 def _fetch_newsdata(query: str, max_articles: int) -> str:
     _newsdata_rate_limit()
 
+    # Record timestamp *before* the call to prevent overshoot when
+    # multiple markets are processed in quick succession.
+    _newsdata_calls.append(time.monotonic())
+
     params = {
         "apikey": settings.newsdata_api_key,
         "q": query,
@@ -174,8 +178,6 @@ def _fetch_newsdata(query: str, max_articles: int) -> str:
         response = client.get(_NEWSDATA_URL, params=params)
         response.raise_for_status()
         data = response.json()
-
-    _newsdata_calls.append(time.monotonic())
 
     results = data.get("results") or []
     if not results:

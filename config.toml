@@ -28,7 +28,7 @@ lay_max_pnl_pct = 0.15
 paper_max_cost_aud = 200.0
 # Realism parameters
 min_market_liquidity_aud = 50.0
-min_matched_volume_aud = 500.0
+min_matched_volume_aud = 2000.0
 max_lay_probability = 0.90
 slippage_model = "linear"
 slippage_factor = 0.10

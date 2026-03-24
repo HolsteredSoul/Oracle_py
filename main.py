@@ -108,6 +108,17 @@ def _analyse_and_trade(
     market_start_time = market.get("market_start_time")
     selection_id = market.get("selection_id")
 
+    # --- Niche league filter: skip markets where stats coverage is poor ---
+    _niche_tags = ("u21", "u23", "u18", "u19", "u20", "reserve", "youth", "women", "w)")
+    question_lower = question.lower()
+    runner_lower = runner_name.lower()
+    if any(tag in question_lower or tag in runner_lower for tag in _niche_tags):
+        logger.info(
+            "Niche league gate | market=%s question=%s — skipping (poor stats coverage)",
+            market_id, question[:80],
+        )
+        return
+
     # --- Statistical model (Phase 5A.2) ---
     p_model: float | None = None
     stats_context = ""
@@ -202,7 +213,11 @@ def _analyse_and_trade(
     # otherwise fall back to market mid-price.
     default_prior = p_model if p_model is not None else mid_price
     prior_p = state.priors.get(market_id, default_prior)
-    p_fair = update_probability(prior_p, sentiment_delta, settings.risk.beta)
+
+    # Halve beta when the statistical model is absent — the LLM sentiment
+    # signal is the only input so it shouldn't be amplified as aggressively.
+    effective_beta = settings.risk.beta if p_model is not None else settings.risk.beta * 0.5
+    p_fair = update_probability(prior_p, sentiment_delta, effective_beta)
 
     # Sanity gate: extreme divergence from mid_price likely means sign confusion.
     # (e.g. LLM returns negative delta for "Under X Goals" at low implied prob.)
@@ -281,12 +296,18 @@ def _analyse_and_trade(
     back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
     lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")
     margin_min = settings.triggers.margin_min_paper
+    commission = settings.risk.commission_pct
 
-    if back_edge >= margin_min and back_edge >= lay_edge:
+    # Compare commission-adjusted edges against the threshold.
+    # Raw edges that vanish after the 5% commission are not real edges.
+    net_back_edge = back_edge - commission
+    net_lay_edge = lay_edge - commission
+
+    if net_back_edge >= margin_min and net_back_edge >= net_lay_edge:
         direction = "back"
         edge = back_edge
         q_market = p_ask
-    elif lay_edge >= margin_min:
+    elif net_lay_edge >= margin_min:
         # C. Extreme-odds lay filter
         max_lay_prob = settings.risk.max_lay_probability
         if p_bid > max_lay_prob:
@@ -300,8 +321,8 @@ def _analyse_and_trade(
         q_market = p_bid
     else:
         logger.info(
-            "No edge | market=%s back=%.3f lay=%.3f min=%.3f",
-            market_id, back_edge, lay_edge, margin_min,
+            "No edge | market=%s back=%.3f lay=%.3f net_back=%.3f net_lay=%.3f min=%.3f",
+            market_id, back_edge, lay_edge, net_back_edge, net_lay_edge, margin_min,
         )
         return
 
@@ -329,13 +350,17 @@ def _analyse_and_trade(
                     market_id, deep_resp.sentiment_delta,
                     deep_resp.uncertainty_penalty, deep_resp.key_factors,
                 )
-                # Override sentiment with the better-informed deep analysis
-                sentiment_delta = deep_resp.sentiment_delta
-                uncertainty_penalty = deep_resp.uncertainty_penalty
+                # Blend Perplexity-enriched sentiment with prior analysis
+                # instead of overwriting — prevents single-source whiplash.
+                light_delta = sentiment_delta  # preserve the pre-Perplexity value
+                sentiment_delta = 0.6 * deep_resp.sentiment_delta + 0.4 * light_delta
+                uncertainty_penalty = min(
+                    deep_resp.uncertainty_penalty, uncertainty_penalty,
+                )
 
                 # Re-compute Bayesian update and edge with new delta
                 prior_p = state.priors.get(market_id, default_prior)
-                p_fair = update_probability(prior_p, sentiment_delta, settings.risk.beta)
+                p_fair = update_probability(prior_p, sentiment_delta, effective_beta)
 
                 divergence = abs(p_fair - mid_price)
                 if divergence > 0.40:
@@ -356,12 +381,14 @@ def _analyse_and_trade(
 
                 back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
                 lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")
+                net_back_edge = back_edge - commission
+                net_lay_edge = lay_edge - commission
 
-                if back_edge >= margin_min and back_edge >= lay_edge:
+                if net_back_edge >= margin_min and net_back_edge >= net_lay_edge:
                     direction = "back"
                     edge = back_edge
                     q_market = p_ask
-                elif lay_edge >= margin_min:
+                elif net_lay_edge >= margin_min:
                     direction = "lay"
                     edge = lay_edge
                     q_market = p_bid
@@ -378,6 +405,13 @@ def _analyse_and_trade(
 
     # --- Kelly sizing ---
     conf_score = PaperBroker.derive_conf_score(uncertainty_penalty)
+
+    # Penalise confidence when the statistical model couldn't anchor p_fair.
+    # Without a model, the LLM is trading blind — halve confidence so Kelly
+    # produces smaller positions on low-information markets.
+    if p_model is None:
+        conf_score *= 0.50
+
     f_star = commission_aware_kelly(
         p_fair, q_market, settings.risk.commission_pct, direction
     )
