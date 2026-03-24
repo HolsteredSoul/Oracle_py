@@ -4,7 +4,7 @@ Pure function, no network calls, fully testable in isolation.
 Reads thresholds from config.
 
 Public API:
-    should_trigger_deep(sentiment_delta, volatility_z, x_momentum) -> bool
+    should_trigger_deep(sentiment_delta, volatility_z) -> bool
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from src.config import settings
 def should_trigger_deep(
     sentiment_delta: float,
     volatility_z: float,
-    x_momentum: float,
 ) -> bool:
     """Return True if any signal exceeds its configured threshold.
 
@@ -26,7 +25,6 @@ def should_trigger_deep(
         sentiment_delta: Absolute sentiment shift from the light scan [-1, 1].
                          Uses absolute value — strong negative signals also trigger.
         volatility_z:    Z-score of recent price volatility vs. rolling baseline.
-        x_momentum:      X/Twitter momentum score for the market's keywords [0, 1].
 
     Returns:
         True if any signal breaches its threshold.
@@ -35,5 +33,4 @@ def should_trigger_deep(
     return (
         abs(sentiment_delta) > cfg.news_sentiment_delta
         or volatility_z > cfg.volatility_z
-        or x_momentum > cfg.x_momentum
     )

@@ -110,7 +110,6 @@ def build_deep_trigger_prompt(
     question: str,
     mid_price: float,
     news_summary: str,
-    x_summary: str,
     runner_name: str = "",
     market_type: str = "",
     stats_context: str = "",
@@ -122,7 +121,6 @@ def build_deep_trigger_prompt(
         question: The prediction market question text.
         mid_price: Current market mid-price (0–1 probability).
         news_summary: Recent news headlines as a single string.
-        x_summary: Recent X/Twitter posts as a single string.
         runner_name: Specific selection being priced (e.g. "Sydney Swans").
         market_type: Betfair market type (e.g. "MATCH_ODDS", "WINNER").
         stats_context: Pre-formatted statistical context string.
@@ -160,12 +158,11 @@ def build_deep_trigger_prompt(
 Market question: {question}{selection_ctx}
 Current mid-price (implied probability): {mid_price:.3f}{stats_block}
 Recent news: {news_summary or "No recent news available."}
-X/Twitter sentiment: {x_summary or "No X data available."}
 
 {direction_instruction}
 
 Step-by-step:
-1. Synthesize all news and X/Twitter signals.
+1. Synthesize all available news signals.
 2. Consider your prior knowledge of this sport, team, or competition.
 3. Estimate whether {ref_price:.3f} is fair, too high, or too low.
 4. Estimate the directional impact and its magnitude.

@@ -168,6 +168,15 @@ Team lineups announced 60–90 minutes before kickoff create a genuine informati
 - Compare announced XI to expected XI; trigger deep LLM analysis on surprise changes
 - Requires faster scan interval (5–10 min) during pre-match window
 
+### 5A.4 — Reddit Sentiment Enrichment (Not Started)
+
+Reddit communities (r/tennis, r/soccer, r/sportsbook, r/afl, r/nba) provide pre-match discussion and crowd sentiment that the news pipeline misses. Replaces the removed X/Twitter enrichment with a free alternative.
+
+- Reddit API integration (free tier, OAuth2) via `src/enrichment/reddit_sentiment.py`
+- Subreddit search by event keywords, sorted by relevance/recency
+- Top comment text concatenated and passed to LLM prompt (same pattern as old X enrichment)
+- Optional: extract a quantitative momentum score from upvote ratios / comment volume to feed the deep trigger
+
 ### Phase 5A Exit Gate
 
 - [x] CLV tracking implemented and running

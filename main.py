@@ -25,7 +25,6 @@ from src.config import settings
 from src.enrichment.news import get_news_summary, rewrite_query
 from src.enrichment.stats import get_match_stats
 from src.enrichment.trigger import should_trigger_deep
-from src.enrichment.x_sentiment import get_x_summary
 from src.execution.paper import PaperBroker
 from src.llm.client import call_llm, call_perplexity
 from src.llm.models import DeepTriggerResponse, LightScanResponse, light_scan_schema, deep_trigger_schema
@@ -149,8 +148,6 @@ def _analyse_and_trade(
     # --- Enrichment ---
     search_query = rewrite_query(question, runner_name=runner_name, market_type=market_type)
     news = get_news_summary(search_query)
-    x_data = get_x_summary(search_query.split()[:5])
-
     # --- Light scan ---
     light_prompt = build_light_scan_prompt(
         question, mid_price, news,
@@ -179,10 +176,10 @@ def _analyse_and_trade(
 
     # --- Deep trigger decision ---
     response = light
-    if should_trigger_deep(light.sentiment_delta, volatility_z=0.0, x_momentum=0.0):
+    if should_trigger_deep(light.sentiment_delta, volatility_z=0.0):
         logger.info("Deep trigger fired for market %s", market_id)
         deep_prompt = build_deep_trigger_prompt(
-            question, mid_price, news, x_data,
+            question, mid_price, news,
             runner_name=runner_name, market_type=market_type,
             stats_context=stats_context, model_probability=p_model,
         )
@@ -336,7 +333,7 @@ def _analyse_and_trade(
         # Re-run deep LLM with grounded web search context
         enriched_news = f"{news}\n\n--- Perplexity web search ---\n{perplexity_news}"
         deep_prompt = build_deep_trigger_prompt(
-            question, mid_price, enriched_news, x_data,
+            question, mid_price, enriched_news,
             runner_name=runner_name, market_type=market_type,
             stats_context=stats_context, model_probability=p_model,
         )

@@ -34,7 +34,6 @@ class TriggersConfig(BaseModel):
     """Event-driven trigger thresholds."""
 
     news_sentiment_delta: float = Field(gt=0, le=1.0)
-    x_momentum: float = Field(gt=0, le=1.0)
     volatility_z: float = Field(gt=0)
     margin_min_paper: float = Field(gt=0, le=1.0)
     margin_min_live: float = Field(gt=0, le=1.0)
@@ -142,7 +141,6 @@ class Settings(BaseSettings):
     # Secrets loaded from environment variables
     openrouter_api_key: str = ""
     newsdata_api_key: str = ""
-    x_bearer_token: str = ""
     football_data_api_key: str = ""
     basketball_api_key: str = ""
     betfair_username: str = ""
