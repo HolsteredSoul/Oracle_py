@@ -109,7 +109,7 @@ def _analyse_and_trade(
     selection_id = market.get("selection_id")
 
     # --- Niche league filter: skip markets where stats coverage is poor ---
-    _niche_tags = ("u21", "u23", "u18", "u19", "u20", "reserve", "youth", "women", "w)")
+    _niche_tags = ("u21", "u23", "u18", "u19", "u20", "reserve", "youth", "women", "(w)", " w)")
     question_lower = question.lower()
     runner_lower = runner_name.lower()
     if any(tag in question_lower or tag in runner_lower for tag in _niche_tags):

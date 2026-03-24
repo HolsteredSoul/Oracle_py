@@ -97,7 +97,7 @@ def get_news_summary(query: str, max_articles: int = 5) -> str:
     """Fetch recent news for a query and return a plain-text summary.
 
     Tries NewsData.io first, then falls back to Google News RSS when
-    NewsData returns no results. Results are cached per query for 1 hour.
+    NewsData returns no results. Results are cached per query for 2 hours.
 
     Args:
         query:        Search terms (ideally from rewrite_query()).
