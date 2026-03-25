@@ -26,6 +26,7 @@ import streamlit as st
 
 _STATE_PATH = Path("state/oracle_state.json")
 _SPEND_PATH = Path("state/llm_spend.json")
+_SCAN_FEED_PATH = Path("state/scan_feed.json")
 _REFRESH_INTERVAL_SEC = 60
 _DAILY_CAP_USD = 5.0   # default; overridden by spend file if available
 _TRIGGER_SCAN_PATH = Path("state/trigger_scan")
@@ -73,6 +74,16 @@ def load_spend() -> dict:
         return json.loads(_SPEND_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def load_scan_feed() -> dict:
+    """Load scan feed dict. Returns {"cycles": []} on missing file."""
+    if not _SCAN_FEED_PATH.exists():
+        return {"cycles": []}
+    try:
+        return json.loads(_SCAN_FEED_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"cycles": []}
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +555,101 @@ def render_realism_panel() -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def render_scan_feed_panel(scan_feed: dict) -> None:
+    """Panel: Live scan feed — per-market outcomes from recent cycles."""
+    st.subheader("Scan Feed")
+
+    cycles = scan_feed.get("cycles", [])
+    if not cycles:
+        st.info("No scan data yet. Waiting for the first cycle to complete.")
+        return
+
+    # Cycle selector — most recent first
+    cycle_labels = []
+    for i, c in enumerate(reversed(cycles)):
+        ts = _to_local(c.get("started_at", ""), fmt="%b %d, %I:%M %p")
+        n_markets = c.get("markets_analysed", 0)
+        cycle_labels.append(f"{ts} ({n_markets} markets)")
+
+    selected_idx = st.selectbox(
+        "Cycle", range(len(cycle_labels)),
+        format_func=lambda i: cycle_labels[i],
+        label_visibility="collapsed",
+    )
+    cycle = list(reversed(cycles))[selected_idx]
+
+    # Header metrics
+    started = cycle.get("started_at", "")
+    finished = cycle.get("finished_at", "")
+    duration_str = ""
+    if started and finished:
+        try:
+            t0 = datetime.fromisoformat(started)
+            t1 = datetime.fromisoformat(finished)
+            dur_sec = (t1 - t0).total_seconds()
+            duration_str = f"{dur_sec:.0f}s"
+        except Exception:
+            pass
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Markets Found", cycle.get("markets_found", 0))
+    col2.metric("Markets Analysed", cycle.get("markets_analysed", 0))
+    col3.metric("Duration", duration_str or "—")
+
+    entries = cycle.get("entries", [])
+    if not entries:
+        st.info("No markets analysed in this cycle.")
+        return
+
+    # Outcome summary badges
+    outcome_counts: dict[str, int] = {}
+    for e in entries:
+        o = e.get("outcome", "unknown")
+        outcome_counts[o] = outcome_counts.get(o, 0) + 1
+
+    _OUTCOME_COLORS = {
+        "traded": "#00CC96",
+        "no_edge": "#FFA15A",
+        "edge_lost": "#FFA15A",
+        "negative_kelly": "#FFA15A",
+        "risk_blocked": "#AB63FA",
+        "skipped_volume": "#636EFA",
+        "skipped_liquidity": "#636EFA",
+        "skipped_niche": "#7F7F7F",
+        "skipped_inplay": "#7F7F7F",
+        "skipped_crossed": "#7F7F7F",
+        "skipped_divergence": "#7F7F7F",
+        "skipped_llm_fail": "#EF553B",
+    }
+
+    badges_html = " ".join(
+        f'<span style="background:{_OUTCOME_COLORS.get(o, "#7F7F7F")};color:white;'
+        f'padding:2px 8px;border-radius:10px;font-size:0.85em;margin-right:4px;">'
+        f'{o.replace("_", " ")} ({cnt})</span>'
+        for o, cnt in sorted(outcome_counts.items(), key=lambda x: -x[1])
+    )
+    st.markdown(badges_html, unsafe_allow_html=True)
+    st.write("")  # spacer
+
+    # Entries table
+    rows = []
+    for e in entries:
+        outcome = e.get("outcome", "")
+        rows.append({
+            "Market": (e.get("question") or "")[:60],
+            "Outcome": outcome.replace("_", " "),
+            "Delta": f"{e['delta']:.3f}" if e.get("delta") is not None else "—",
+            "Uncert": f"{e['uncertainty']:.3f}" if e.get("uncertainty") is not None else "—",
+            "Volume": f"{e['volume']:.0f}" if e.get("volume") is not None else "—",
+            "Back Edge": f"{e['back_edge']:.3f}" if e.get("back_edge") is not None else "—",
+            "Lay Edge": f"{e['lay_edge']:.3f}" if e.get("lay_edge") is not None else "—",
+            "Dir": e.get("direction") or "—",
+            "Reason": (e.get("reason") or "")[:50],
+        })
+
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def render_llm_cost_panel(spend: dict) -> None:
     """Panel 7: LLM cost — today's spend vs daily cap."""
     st.subheader("LLM Cost")
@@ -575,6 +681,7 @@ def main() -> None:
 
     state_raw = load_state()
     spend = load_spend()
+    scan_feed = load_scan_feed()
 
     if not state_raw:
         st.warning("No state file found at state/oracle_state.json. Is the agent running?")
@@ -611,6 +718,10 @@ def main() -> None:
     col4.metric("Open Positions", len(positions))
     settled_count = sum(1 for t in trade_history if t.get("status") == "settled")
     col5.metric("Settled Trades", settled_count)
+
+    st.divider()
+
+    render_scan_feed_panel(scan_feed)
 
     st.divider()
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from src.config import settings
+from src.config import PROJECT_ROOT, settings
 from src.enrichment.team_mapping import FUZZY_THRESHOLD, normalize_team_name
 
 from .models import MatchStats, TIMEOUT, compute_completeness
@@ -79,13 +81,64 @@ _team_name_cache: dict[str, str] = {}
 
 _FD_COMPETITIONS = ["PL", "BL1", "SA", "PD", "FL1", "DED", "PPL", "ELC", "CL"]
 _fd_team_index_built = False
+_FD_TEAM_INDEX_PATH = PROJECT_ROOT / "state" / "fd_team_index.json"
+
+
+def _fd_load_cached_index() -> bool:
+    """Try to load team index from disk cache. Returns True if cache is fresh."""
+    global _fd_team_index_built  # noqa: PLW0603
+    if not _FD_TEAM_INDEX_PATH.exists():
+        return False
+    try:
+        data = json.loads(_FD_TEAM_INDEX_PATH.read_text(encoding="utf-8"))
+        built_at = datetime.fromisoformat(data["built_at"])
+        ttl = timedelta(hours=settings.stats.cache_ttl_hours)
+        if datetime.now(timezone.utc) - built_at > ttl:
+            logger.info(
+                "fd_team_index cache stale (built_at=%s, ttl=%dh)",
+                data["built_at"], settings.stats.cache_ttl_hours,
+            )
+            return False
+        # Restore caches — JSON keys are already lowercase strings
+        for k, v in data.get("team_id_cache", {}).items():
+            _team_id_cache[k] = v
+        for k, v in data.get("team_name_cache", {}).items():
+            _team_name_cache[k] = v
+        _fd_team_index_built = True
+        logger.info(
+            "football-data.org team index loaded from cache: %d entries (built_at=%s)",
+            len(_team_id_cache), data["built_at"],
+        )
+        return True
+    except (json.JSONDecodeError, KeyError, ValueError, OSError) as exc:
+        logger.warning("fd_team_index cache unreadable: %s", exc)
+        return False
+
+
+def _fd_save_index_cache() -> None:
+    """Persist the team index to disk (atomic write)."""
+    data = {
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "team_id_cache": {k: v for k, v in _team_id_cache.items() if v is not None},
+        "team_name_cache": dict(_team_name_cache),
+    }
+    _FD_TEAM_INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _FD_TEAM_INDEX_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(_FD_TEAM_INDEX_PATH)
+    logger.info("fd_team_index saved to cache: %d entries", len(_team_id_cache))
 
 
 def _fd_build_team_index() -> None:
-    """Build a name→ID index from all available competitions (called once)."""
+    """Build a name->ID index. Loads from disk cache if fresh, else hits API."""
     global _fd_team_index_built  # noqa: PLW0603
     if _fd_team_index_built:
         return
+
+    # Try disk cache first
+    if _fd_load_cached_index():
+        return
+
     _fd_team_index_built = True
 
     for comp_code in _FD_COMPETITIONS:
@@ -103,7 +156,8 @@ def _fd_build_team_index() -> None:
                     _team_id_cache[short.lower()] = tid
                     _team_name_cache[short.lower()] = short
 
-    logger.info("football-data.org team index built: %d entries", len(_team_id_cache))
+    logger.info("football-data.org team index built from API: %d entries", len(_team_id_cache))
+    _fd_save_index_cache()
 
 
 def get_fd_team_index() -> dict[str, int]:

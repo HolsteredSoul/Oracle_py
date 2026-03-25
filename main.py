@@ -37,6 +37,7 @@ from src.llm.prompts import (
 from src.logging_setup import configure_logging
 from src.risk.manager import check_risk_gates
 from src.scanner import betfair_scanner
+from src.storage.scan_feed import ScanFeedWriter
 from src.storage.state_manager import OracleState, StateManager, Trade
 from src.strategy.bayesian import update_probability
 from src.strategy.edge import executable_edge
@@ -94,6 +95,7 @@ def _analyse_and_trade(
     broker: PaperBroker,
     exposure: float,
     drawdown: float,
+    feed: ScanFeedWriter | None = None,
 ) -> None:
     """Run the full intelligence + strategy + execution pipeline for one market."""
     market_id = market["id"]
@@ -116,6 +118,8 @@ def _analyse_and_trade(
             "Niche league gate | market=%s question=%s — skipping (poor stats coverage)",
             market_id, question[:80],
         )
+        if feed:
+            feed.log_market(market_id, question, "skipped_niche", reason="poor stats coverage")
         return
 
     # --- Statistical model (Phase 5A.2) ---
@@ -158,12 +162,16 @@ def _analyse_and_trade(
 
     if raw is None:
         logger.debug("Light scan returned None for market %s", market_id)
+        if feed:
+            feed.log_market(market_id, question, "skipped_llm_fail", reason="light scan returned None")
         return
 
     try:
         light = LightScanResponse(**raw)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Light scan parse error for %s: %s | raw: %s", market_id, exc, raw)
+        if feed:
+            feed.log_market(market_id, question, "skipped_llm_fail", reason=f"parse error: {exc}")
         return
 
     logger.info(
@@ -224,6 +232,12 @@ def _analyse_and_trade(
             "Extreme divergence | market=%s p_fair=%.3f mid=%.3f delta=%.3f — skipping (likely sign confusion).",
             market_id, p_fair, mid_price, sentiment_delta,
         )
+        if feed:
+            feed.log_market(
+                market_id, question, "skipped_divergence",
+                reason=f"p_fair={p_fair:.3f} mid={mid_price:.3f}",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+            )
         return
 
     # --- Market detail for accurate spread + liquidity ---
@@ -258,6 +272,12 @@ def _analyse_and_trade(
             "Liquidity gate | market=%s liquidity=%.2f < min=%.2f",
             market_id, available_liquidity, min_liq,
         )
+        if feed:
+            feed.log_market(
+                market_id, question, "skipped_liquidity",
+                reason=f"liquidity={available_liquidity:.2f} < min={min_liq:.2f}",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+            )
         return
 
     # B. Minimum matched volume gate
@@ -268,6 +288,13 @@ def _analyse_and_trade(
             "Volume gate | market=%s volume=%.2f < min=%.2f",
             market_id, matched_volume, min_vol,
         )
+        if feed:
+            feed.log_market(
+                market_id, question, "skipped_volume",
+                reason=f"volume={matched_volume:.2f} < min={min_vol:.2f}",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                volume=matched_volume,
+            )
         return
 
     # C2. In-play safety gate — reject trades on in-play markets
@@ -276,6 +303,13 @@ def _analyse_and_trade(
             "In-play gate | market=%s — skipping (no in-play engine)",
             market_id,
         )
+        if feed:
+            feed.log_market(
+                market_id, question, "skipped_inplay",
+                reason="in-play market",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                volume=matched_volume,
+            )
         return
 
     # C3. Crossed-book detection — stale/suspended data
@@ -287,6 +321,13 @@ def _analyse_and_trade(
                 "Crossed book gate | market=%s best_back=%.2f > best_lay=%.2f — stale data",
                 market_id, bb, bl,
             )
+            if feed:
+                feed.log_market(
+                    market_id, question, "skipped_crossed",
+                    reason=f"best_back={bb:.2f} > best_lay={bl:.2f}",
+                    delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                    volume=matched_volume,
+                )
             return
 
     # --- Direction selection (pick best positive edge ≥ margin_min_paper) ---
@@ -312,6 +353,13 @@ def _analyse_and_trade(
                 "Extreme lay gate | market=%s p_bid=%.4f > max=%.4f",
                 market_id, p_bid, max_lay_prob,
             )
+            if feed:
+                feed.log_market(
+                    market_id, question, "no_edge",
+                    reason=f"extreme lay p_bid={p_bid:.4f} > max={max_lay_prob:.4f}",
+                    delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                    volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                )
             return
         direction = "lay"
         edge = lay_edge
@@ -321,6 +369,13 @@ def _analyse_and_trade(
             "No edge | market=%s back=%.3f lay=%.3f net_back=%.3f net_lay=%.3f min=%.3f",
             market_id, back_edge, lay_edge, net_back_edge, net_lay_edge, margin_min,
         )
+        if feed:
+            feed.log_market(
+                market_id, question, "no_edge",
+                reason=f"back={back_edge:.3f} lay={lay_edge:.3f} net_back={net_back_edge:.3f} net_lay={net_lay_edge:.3f} min={margin_min:.3f}",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+            )
         return
 
     # --- Tier 2: Perplexity-enriched deep re-scan for edge candidates ---
@@ -366,6 +421,13 @@ def _analyse_and_trade(
                         "market=%s p_fair=%.3f mid=%.3f — skipping.",
                         market_id, p_fair, mid_price,
                     )
+                    if feed:
+                        feed.log_market(
+                            market_id, question, "skipped_divergence",
+                            reason=f"post-Perplexity p_fair={p_fair:.3f} mid={mid_price:.3f}",
+                            delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                            volume=matched_volume,
+                        )
                     return
 
                 # Re-fetch prices — market may have moved during Perplexity call
@@ -394,6 +456,13 @@ def _analyse_and_trade(
                         "Edge lost after Perplexity re-scan | market=%s back=%.3f lay=%.3f",
                         market_id, back_edge, lay_edge,
                     )
+                    if feed:
+                        feed.log_market(
+                            market_id, question, "edge_lost",
+                            reason=f"post-Perplexity back={back_edge:.3f} lay={lay_edge:.3f}",
+                            delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                            volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                        )
                     return
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -414,14 +483,30 @@ def _analyse_and_trade(
     )
     if f_star <= 0:
         logger.info("Negative Kelly for %s — no edge after commission, skipping.", market_id)
+        if feed:
+            feed.log_market(
+                market_id, question, "negative_kelly",
+                reason="f_star <= 0 after commission",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                direction=direction,
+            )
         return
 
     f_final = apply_oracle_sizing(f_star, conf_score, drawdown, settings)
 
     # --- Risk gates ---
-    approved, reason = check_risk_gates(f_final, conf_score, exposure, drawdown, settings)
+    approved, gate_reason = check_risk_gates(f_final, conf_score, exposure, drawdown, settings)
     if not approved:
-        logger.info("Risk gate blocked %s: %s", market_id, reason)
+        logger.info("Risk gate blocked %s: %s", market_id, gate_reason)
+        if feed:
+            feed.log_market(
+                market_id, question, "risk_blocked",
+                reason=gate_reason,
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                direction=direction, f_final=f_final,
+            )
         return
 
     # --- Execution (paper) ---
@@ -454,6 +539,13 @@ def _analyse_and_trade(
             "Trade logged | market=%s dir=%s filled=%.4f price=%.3f edge=%.3f",
             market_id, direction, trade.filled_size, trade.fill_price, edge,
         )
+        if feed:
+            feed.log_market(
+                market_id, question, "traded",
+                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                direction=direction, fill_price=trade.fill_price, f_final=f_final,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +741,9 @@ def scan_cycle(
         # Randomize order so we don't re-scan the same subset every cycle.
         random.shuffle(markets)
 
+        feed = ScanFeedWriter()
+        feed.begin_cycle(len(markets))
+
         for market in markets[:_MAX_MARKETS_PER_CYCLE]:
             # Skip markets where we already hold a position
             if market["id"] in state.positions:
@@ -663,6 +758,7 @@ def scan_cycle(
                     broker=broker,
                     exposure=exposure,
                     drawdown=drawdown,
+                    feed=feed,
                 )
                 # Reload after potential trade to get updated exposure/drawdown
                 state = state_manager.load()
@@ -671,6 +767,8 @@ def scan_cycle(
 
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error analysing market %s: %s", market.get("id"), exc)
+
+        feed.end_cycle()
 
         # Always persist state so the dashboard shows current bankroll/positions
         # even during cycles where no edge was found and no trade was placed.
