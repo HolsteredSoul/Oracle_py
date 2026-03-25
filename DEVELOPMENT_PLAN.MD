@@ -32,7 +32,7 @@ Sequential phases with explicit exit gates. Each gate must pass before advancing
 
 - `src/config.py` — Pydantic-validated config from `config.toml` + `.env`
 - `src/scanner/betfair_scanner.py` — `get_markets()` and `get_market_detail()` via betfairlightweight
-- `main.py` — APScheduler with 30-min scan cycle, graceful shutdown
+- `main.py` — APScheduler with adaptive scan cycle (10-45 min), priority sort, rejection cache, graceful shutdown
 - Stdlib logging with rotating file handler
 
 **Exit gate passed:** Agent ran 1 hour without errors, regular scan cycles logged, config validation catches bad values.
@@ -80,7 +80,7 @@ Sequential phases with explicit exit gates. Each gate must pass before advancing
 - `src/storage/state_manager.py` — OracleState with atomic JSON persistence
 - `src/execution/paper.py` — PaperBroker with FOK simulation, partial fills, settlement, cancellation
 - `main.py` — Full pipeline wired: Scanner → Enrichment → LLM → Bayesian → Edge → Kelly → Risk → Execution → State
-- `src/dashboard/app.py` — Streamlit dashboard (equity curve, cash curve, P&L, positions, trade log, LLM cost)
+- `src/dashboard/app.py` — Streamlit dashboard (equity curve, cash curve, P&L, positions, trade log, scan feed, CLV, LLM cost, realism checklist)
 - Kill switch: `touch state/kill_switch.txt`
 
 **Exit gate passed:** 50+ paper trades logged over 1+ week, P&L verified on all 38 settled trades (zero mismatches), 72h continuous run without crash, dashboard displays all panels.
@@ -160,7 +160,39 @@ Statistical model replaces market mid-price as Bayesian prior. LLM becomes a qua
 
 **Pipeline change:** `p_fair = expit(logit(p_model) + β · sentiment_delta)` — statistical model is the prior, LLM delta is the adjustment.
 
-### 5A.3 — Pre-Match Lineup Ingestion (Not Started)
+### 5A.3 — Adaptive Scheduling & Scan Feed ✅
+
+*Implemented 2026-03-25*
+
+Replaced the fixed 30-min/15-market scan regime with intelligent scheduling and full scan observability.
+
+**Adaptive scan interval:**
+- Interval dynamically adjusts between 10-45 minutes based on market density
+- Busy weekends (60-100+ markets): tightens to 10-20 min intervals
+- Quiet weekdays (10-20 markets): relaxes to 45 min intervals
+- Uses `scheduler.reschedule_job()` at the end of each cycle
+
+**Market prioritisation:**
+- Replaced random shuffle with priority sort: time-to-kickoff (≤3h urgent, ≤12h active, >12h early) → matched volume → available liquidity
+- Ensures near-kickoff, high-volume markets are always analysed first
+
+**Rejection cache:**
+- In-memory TTL cache (2h default) for markets that fail hard gates (volume, liquidity, niche, in-play, crossed book)
+- Markets with soft failures (no_edge, negative_kelly) are NOT cached — prices move
+- Prevents wasting LLM calls on markets whose conditions haven't changed
+
+**Scan feed dashboard panel:**
+- `ScanFeedWriter` records per-market outcomes to `state/scan_feed.json` (48-cycle rolling window)
+- Dashboard panel with cycle selector, outcome badges (colour-coded), and detailed entries table
+- Outcomes tracked: `traded`, `no_edge`, `edge_lost`, `skipped_volume`, `skipped_liquidity`, `skipped_niche`, `skipped_inplay`, `skipped_crossed`, `skipped_divergence`, `skipped_llm_fail`, `negative_kelly`, `risk_blocked`
+
+**Football team index disk cache:**
+- Football-data.org 316-team index cached to `state/fd_team_index.json` with TTL
+- Saves 9 API calls per agent restart
+
+**Max markets per cycle raised from 15 → 25** (configurable via `config.toml`).
+
+### 5A.4 — Pre-Match Lineup Ingestion (Not Started)
 
 Team lineups announced 60–90 minutes before kickoff create a genuine informational edge window.
 
@@ -168,7 +200,7 @@ Team lineups announced 60–90 minutes before kickoff create a genuine informati
 - Compare announced XI to expected XI; trigger deep LLM analysis on surprise changes
 - Requires faster scan interval (5–10 min) during pre-match window
 
-### 5A.4 — Reddit Sentiment Enrichment (Not Started)
+### 5A.5 — Reddit Sentiment Enrichment (Not Started)
 
 Reddit communities (r/tennis, r/soccer, r/sportsbook, r/afl, r/nba) provide pre-match discussion and crowd sentiment that the news pipeline misses. Replaces the removed X/Twitter enrichment with a free alternative.
 
@@ -182,6 +214,9 @@ Reddit communities (r/tennis, r/soccer, r/sportsbook, r/afl, r/nba) provide pre-
 - [x] CLV tracking implemented and running
 - [x] LLM prompts updated to receive statistical model output
 - [x] At least one sports data API integrated (football-data.org, Squiggle, basketball)
+- [x] Adaptive scheduling with priority sort and rejection cache
+- [x] Scan feed dashboard panel for full scan observability
+- [x] Football team index cached to disk
 - [ ] Statistical model calibration plot shows < 10% systematic error across probability bins
 - [ ] Agent paper-trades with upgraded signal for ≥ 1 week
 - [ ] CLV positive across 100+ paper trades

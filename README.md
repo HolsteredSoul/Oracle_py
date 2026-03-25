@@ -11,7 +11,7 @@ An autonomous Python prediction-market agent that maximizes long-term geometric 
 Oracle is an event-driven trading agent built around a core principle: **LLM as calibrator, not oracle**. The model outputs sentiment deltas and uncertainty penalties; Bayesian math computes fair probabilities. All sizing is commission-aware Kelly with hard caps and liquidity constraints.
 
 **Key design decisions:**
-- News, X/Twitter sentiment, and volatility spikes trigger expensive LLM calls — not a fixed schedule
+- News and volatility spikes trigger expensive LLM calls — not a fixed schedule
 - Fair probability = `expit(logit(p_mid) + β · sentiment_delta)` (logit-space, numerically stable)
 - Every formula prices in Betfair's 5% commission; Lay bets use explicit liability translation
 - Atomic JSON state writes (`tmp → replace()`) prevent corruption on crash
@@ -22,13 +22,12 @@ Oracle is an event-driven trading agent built around a core principle: **LLM as 
 ## Architecture
 
 ```
-main.py (30-min scan cycle)
+main.py (adaptive scan cycle: 10-45 min based on market density)
     │
     ├── scanner/betfair_scanner.py — Fetch live Betfair AU markets
     ├── enrichment/trigger.py      — Decide: light scan or deep trigger?
     │       ├── enrichment/news.py       — NewsData.io + Google News RSS
-    │       ├── enrichment/x_sentiment.py — X API v2 tweet search
-    │       ├── enrichment/stats.py      — Football-data.org + Squiggle stats
+    │       ├── enrichment/stats.py      — Football-data.org + Squiggle + Basketball stats
     │       └── enrichment/team_mapping.py — Team name resolution (index + Perplexity fallback)
     │
     ├── llm/client.py              — OpenRouter wrapper (cost tracking, tier routing)
@@ -42,10 +41,13 @@ main.py (30-min scan cycle)
     │
     ├── risk/manager.py            — Pre-trade gates (exposure cap, confidence floor, drawdown)
     ├── execution/paper.py         — FOK simulation, partial fills, settlement, cancellation
-    └── storage/state_manager.py   — OracleState JSON persistence
+    │
+    ├── storage/state_manager.py   — OracleState JSON persistence
+    ├── storage/scan_feed.py       — Per-market scan outcomes for dashboard
+    └── storage/rejection_cache.py — Skip recently-rejected markets (in-memory, TTL-based)
 ```
 
-The Streamlit dashboard (`src/dashboard/app.py`) runs as a separate process and reads from the same state file.
+The Streamlit dashboard (`src/dashboard/app.py`) runs as a separate process, reads state files, and includes a live scan feed panel showing per-market outcomes.
 
 ---
 
@@ -58,7 +60,7 @@ The Streamlit dashboard (`src/dashboard/app.py`) runs as a separate process and 
 - Betfair account with API access (required)
 - NewsData.io API key (optional — enrichment)
 - Football-data.org API key (optional — statistical model)
-- X API v2 Bearer token (optional — enrichment)
+- Basketball API key (optional — basketball stats)
 
 ### Installation
 
@@ -86,7 +88,7 @@ pip install -r requirements.txt
    ```
    NEWSDATA_API_KEY=...
    FOOTBALL_DATA_API_KEY=...
-   X_BEARER_TOKEN=...
+   BASKETBALL_API_KEY=...
    BETFAIR_CERTS_PATH=...        # Phase 6 only: directory with client certs
    ```
 
@@ -108,6 +110,12 @@ pip install -r requirements.txt
    slippage_factor = 0.10            # Impact coefficient
    allow_in_play = false             # Block trades on in-play markets
    reject_crossed_book = true        # Skip stale/crossed order books
+
+   [scanner]
+   max_markets_per_cycle = 25        # Markets analysed per cycle
+   min_interval_min = 10             # Adaptive interval floor (busy days)
+   max_interval_min = 45             # Adaptive interval ceiling (quiet days)
+   rejection_cache_ttl_min = 120     # Skip hard-gate failures for 2 hours
 
    [paper]
    queue_position_model = "probabilistic"  # "none", "linear", "probabilistic"
@@ -195,7 +203,7 @@ else:
 
 ### Settlement
 
-Positions are checked for resolution at the top of every 30-minute scan cycle. When a market resolves, P&L is calculated and the position is closed:
+Positions are checked for resolution at the top of every scan cycle (adaptive interval: 10-45 min based on market density). When a market resolves, P&L is calculated and the position is closed:
 
 | Direction | Resolution | P&L |
 |-----------|------------|-----|
@@ -271,17 +279,19 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 
 | File | Purpose |
 |------|---------|
-| `main.py` | Entry point, scheduler, main loop |
+| `main.py` | Entry point, adaptive scheduler, priority sort, scan loop |
 | `config.toml` | All runtime configuration |
 | `WHITEPAPER.MD` | Full technical specification and math derivations |
 | `DEVELOPMENT_PLAN.MD` | Six-phase roadmap with exit gates |
 | `src/strategy/kelly.py` | Kelly formula + Lay liability translation |
 | `src/strategy/bayesian.py` | Logit-space probability updater |
 | `src/execution/paper.py` | Paper broker simulation |
-| `src/dashboard/app.py` | Streamlit monitoring UI |
-| `src/enrichment/stats.py` | Statistical data fetcher (football-data.org, Squiggle) |
+| `src/dashboard/app.py` | Streamlit monitoring UI (equity, positions, scan feed, CLV, cost) |
+| `src/enrichment/stats.py` | Statistical data fetcher (football-data.org, Squiggle, Basketball) |
 | `src/enrichment/team_mapping.py` | Betfair → stats API team name resolution (index + Perplexity fallback) |
 | `src/strategy/statistical_model.py` | Poisson match outcome prediction model |
+| `src/storage/scan_feed.py` | Records per-market scan outcomes for dashboard display |
+| `src/storage/rejection_cache.py` | In-memory TTL cache — skips recently-rejected markets |
 
 ---
 
@@ -300,6 +310,9 @@ size    = min(f_final · bankroll, liquidity × 0.70)
 - **Crossed-book gate**: Markets with crossed order books (stale data) are rejected
 - **Drawdown throttle**: Kelly halved automatically when drawdown exceeds 20%
 - **Auto-cancel**: Positions in aged-out markets are auto-cancelled with escrow refund
+- **Rejection cache**: Markets failing hard gates (volume, liquidity, niche) are skipped for 2 hours — prevents wasting LLM calls on unchanged conditions
+- **Adaptive scheduling**: Scan interval adjusts 10-45 min based on market density — faster on busy weekends, slower on quiet weekdays
+- **Priority sort**: Markets sorted by time-to-kickoff then volume — urgent/liquid markets analysed first
 
 ---
 

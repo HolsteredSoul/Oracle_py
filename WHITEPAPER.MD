@@ -212,37 +212,45 @@ Output JSON only:
 ### 4.1 Main Cycle
 
 ```text
-START: Timer (30 min) OR Trigger (news / X / volatility spike)
+START: Adaptive timer (10-45 min based on market density)
   │
-  ├─ Trigger strength check:
-  │   sentiment_delta > 0.28  OR  volatility_z > 2.3  OR  x_momentum > 0.32?
+  ├─ Settle open positions (check Betfair for resolutions)
   │
-  ├─ No  ──► Light Batch Scan (cheap LLM) → get sentiment_delta
+  ├─ Fetch markets from Betfair (up to 200 catalogue, ~55 after filtering)
   │
-  └─ Yes ──► Deep LLM + Full Enrichment → compute Bayesian p_fair
-                  │
-                  ▼
-       Executable edge > delta_min?
-       (p_fair > ask + 0.015  OR  p_fair < bid - 0.015)
+  ├─ Priority sort: time-to-kickoff → volume → liquidity
+  │   (soonest kickoff + highest volume analysed first)
   │
-  ├─ No  ──► Log missed opportunity → sleep
+  ├─ Skip rejection-cached markets (hard gate failures cached for 2h)
   │
-  └─ Yes ──► Confidence-scaled half-Kelly + liquidity cap
-                  │
-                  ▼
-       Risk gates pass?
-       (exposure ≤ 85%,  conf ≥ 52,  drawdown throttle OK)
+  ├─ For each market (up to 25 per cycle):
+  │   │
+  │   ├─ Niche league filter (U21, women, reserve → skip + cache)
+  │   │
+  │   ├─ Statistical model → p_model (Poisson/logistic prior)
+  │   │
+  │   ├─ Light scan (cheap LLM) → sentiment_delta, uncertainty
+  │   │
+  │   ├─ Deep trigger? (|delta| > 0.15 or volatility_z > 2.3)
+  │   │   └─ Yes → Deep LLM + Perplexity web search
+  │   │
+  │   ├─ Bayesian update: p_fair = expit(logit(p_model) + β · delta)
+  │   │
+  │   ├─ Realism gates: volume ≥ $500, liquidity ≥ $50, not in-play,
+  │   │   not crossed book (failures cached in rejection cache)
+  │   │
+  │   ├─ Edge check: net_edge ≥ margin_min (3% post-commission)
+  │   │
+  │   ├─ Perplexity-enriched deep re-scan for edge candidates
+  │   │
+  │   ├─ Kelly sizing → risk gates → execute via PaperBroker
+  │   │
+  │   └─ Log outcome to scan feed (for dashboard)
   │
-  ├─ No  ──► Log skip → sleep
+  ├─ Compute next interval from market density + rejection count
+  │   (more actionable markets → shorter interval)
   │
-  └─ Yes ──► Execute via OMS
-             (FOK if crossing spread; Limit + 300s synthetic TIF if resting)
-                  │
-                  ▼
-       Monitor: partial fills, trailing stop, suspensions, opportunistic exit
-                  │
-                  ▼
-       Reconcile bankroll/positions → update dashboard → LOOP
+  └─ Persist state → update dashboard → LOOP
 ```
 
 ### 4.2 Sizing Decision Tree
@@ -313,8 +321,12 @@ queue_factor = 0.50                    # hidden queue depth factor
 track_fill_rates = true                # log fill rates for calibration
 
 [scanner]
-poll_interval_sec = 1800                # 30 min base timer
+poll_interval_sec = 1800                # initial interval (adaptive: 10-45 min)
 prob_range = [0.05, 0.95]              # avoid nearly-resolved markets
+max_markets_per_cycle = 25             # markets analysed per cycle
+min_interval_min = 10                  # adaptive floor (busy weekends)
+max_interval_min = 45                  # adaptive ceiling (quiet weekdays)
+rejection_cache_ttl_min = 120          # skip hard-gate failures for 2h
 
 [betfair]
 # Phase 4 only — leave empty during paper trading
@@ -359,14 +371,15 @@ Pending ──► Placed ──► Partial ──► Filled ──► Trailing �
 
 | Panel | Content |
 |---|---|
+| Top metrics | Bankroll, P&L, win rate, CLV, exposure, drawdown |
+| Scan feed | Live per-market outcomes with cycle selector, outcome badges, and entries table |
 | Equity curve | Running bankroll vs time |
-| Edge histogram | Post-spread executable edge distribution |
-| Fill rate log | Intended vs actual fill size per trade |
-| Drawdown chart | Rolling max drawdown |
-| Trigger log | All trigger events with signal strengths |
-| Missed-opportunity log | Edges below threshold (for tuning `delta_min`) |
-| Position table | Open positions with current P&L |
-| LLM cost tracker | Daily spend vs cap |
+| Cash curve | Bankroll (including escrowed capital) vs time |
+| CLV chart | Closing line value per trade + cumulative trend |
+| Position table | Open positions with entry price, P&L, last seen price |
+| Trade log | Full history with filters (settled/open/cancelled) |
+| LLM cost tracker | Daily spend vs cap with progress bar |
+| Realism checklist | Scored feature checklist (fill model, slippage, gates) |
 | CSV export | Full trade history download |
 
 ---
@@ -393,10 +406,10 @@ oracle-py/
 │   │
 │   ├── enrichment/
 │   │   ├── __init__.py
-│   │   ├── news.py             # NewsData.io API client
-│   │   ├── stats.py            # Statistical data fetcher (football-data.org, Squiggle)
-│   │   ├── team_mapping.py     # Betfair ↔ stats API name resolution (fuzzy match)
-│   │   └── x_sentiment.py      # X API v2 client + keyword aggregation
+│   │   ├── news.py             # NewsData.io + Google News RSS
+│   │   ├── stats.py            # Statistical data fetcher (football-data.org, Squiggle, Basketball)
+│   │   ├── team_mapping.py     # Betfair ↔ stats API name resolution (index + Perplexity fallback)
+│   │   └── trigger.py          # Event-driven deep trigger decision
 │   │
 │   ├── llm/
 │   │   ├── __init__.py
@@ -433,7 +446,9 @@ oracle-py/
 │   │
 │   └── storage/
 │       ├── __init__.py
-│       └── state_manager.py    # JSON persistence: load/save/atomic write
+│       ├── state_manager.py    # JSON persistence: load/save/atomic write
+│       ├── scan_feed.py        # Per-market scan outcomes for dashboard display
+│       └── rejection_cache.py  # In-memory TTL cache — skip recently-rejected markets
 │
 └── tests/
     ├── __init__.py
