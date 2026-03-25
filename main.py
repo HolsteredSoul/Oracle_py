@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import random
 import signal
 import time
 from datetime import datetime, timezone
@@ -37,6 +36,7 @@ from src.llm.prompts import (
 from src.logging_setup import configure_logging
 from src.risk.manager import check_risk_gates
 from src.scanner import betfair_scanner
+from src.storage.rejection_cache import RejectionCache
 from src.storage.scan_feed import ScanFeedWriter
 from src.storage.state_manager import OracleState, StateManager, Trade
 from src.strategy.bayesian import update_probability
@@ -46,10 +46,6 @@ from src.strategy.statistical_model import predict_match_odds, select_runner_pro
 
 configure_logging()
 logger = logging.getLogger(__name__)
-
-# Maximum markets to run through the intelligence layer per cycle.
-# Keeps LLM costs predictable during development.
-_MAX_MARKETS_PER_CYCLE = 15
 
 # Betfair event type IDs for sport detection
 _EVENT_TYPE_SOCCER = "1"
@@ -96,6 +92,7 @@ def _analyse_and_trade(
     exposure: float,
     drawdown: float,
     feed: ScanFeedWriter | None = None,
+    rejection_cache: RejectionCache | None = None,
 ) -> None:
     """Run the full intelligence + strategy + execution pipeline for one market."""
     market_id = market["id"]
@@ -120,6 +117,8 @@ def _analyse_and_trade(
         )
         if feed:
             feed.log_market(market_id, question, "skipped_niche", reason="poor stats coverage")
+        if rejection_cache:
+            rejection_cache.reject(market_id, "skipped_niche")
         return
 
     # --- Statistical model (Phase 5A.2) ---
@@ -278,6 +277,8 @@ def _analyse_and_trade(
                 reason=f"liquidity={available_liquidity:.2f} < min={min_liq:.2f}",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
             )
+        if rejection_cache:
+            rejection_cache.reject(market_id, "skipped_liquidity")
         return
 
     # B. Minimum matched volume gate
@@ -295,6 +296,8 @@ def _analyse_and_trade(
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume,
             )
+        if rejection_cache:
+            rejection_cache.reject(market_id, "skipped_volume")
         return
 
     # C2. In-play safety gate — reject trades on in-play markets
@@ -310,6 +313,8 @@ def _analyse_and_trade(
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume,
             )
+        if rejection_cache:
+            rejection_cache.reject(market_id, "skipped_inplay")
         return
 
     # C3. Crossed-book detection — stale/suspended data
@@ -328,6 +333,8 @@ def _analyse_and_trade(
                     delta=sentiment_delta, uncertainty=uncertainty_penalty,
                     volume=matched_volume,
                 )
+            if rejection_cache:
+                rejection_cache.reject(market_id, "skipped_crossed")
             return
 
     # --- Direction selection (pick best positive edge ≥ margin_min_paper) ---
@@ -712,9 +719,58 @@ def _validate_settlements(trades: list[Trade]) -> None:
             )
 
 
+def _market_priority(m: dict, now: datetime) -> tuple[int, float, float]:
+    """Priority key for market sorting. Lower tuple = higher priority.
+
+    Tier 1: Time-to-kickoff buckets (urgent first)
+    Tier 2: Volume descending (liquid markets first)
+    Tier 3: Available liquidity descending
+    """
+    start = m.get("market_start_time")
+    if start:
+        hours_to_start = (start - now).total_seconds() / 3600
+        if hours_to_start <= 3:
+            time_tier = 0   # urgent — last chance to trade
+        elif hours_to_start <= 12:
+            time_tier = 1   # active trading window
+        else:
+            time_tier = 2   # early scan
+    else:
+        time_tier = 3       # unknown start time — lowest priority
+
+    volume = m.get("volume", 0) or 0
+    liq = m.get("totalLiquidity", 0) or 0
+    return (time_tier, -volume, -liq)
+
+
+def _compute_next_interval(
+    total_markets: int,
+    rejected_count: int,
+    max_per_cycle: int,
+) -> int:
+    """Compute minutes until next cycle based on market density.
+
+    Scans more frequently when there are more actionable markets,
+    less frequently when most are cached/rejected.
+    """
+    min_min = settings.scanner.min_interval_min
+    max_min = settings.scanner.max_interval_min
+    actionable = max(total_markets - rejected_count, 1)
+
+    # How many cycles needed to cover 80% of actionable markets?
+    cycles_needed = max(int(actionable * 0.80 / max_per_cycle), 1)
+
+    # Spread those cycles over 60 minutes
+    interval = max(60 // cycles_needed, min_min)
+    interval = min(interval, max_min)
+    return interval
+
+
 def scan_cycle(
     state_manager: StateManager,
     broker: PaperBroker,
+    rejection_cache: RejectionCache | None = None,
+    scheduler: BackgroundScheduler | None = None,
 ) -> None:
     """Run one full scan cycle with settlement checks and paper execution."""
 
@@ -738,18 +794,32 @@ def scan_cycle(
         )
         logger.info("Scan cycle started, found %d markets", len(markets))
 
-        # Randomize order so we don't re-scan the same subset every cycle.
-        random.shuffle(markets)
+        # Prioritise: soonest kickoff + highest volume first
+        now = datetime.now(timezone.utc)
+        markets.sort(key=lambda m: _market_priority(m, now))
+
+        max_per_cycle = settings.scanner.max_markets_per_cycle
 
         feed = ScanFeedWriter()
         feed.begin_cycle(len(markets))
 
-        for market in markets[:_MAX_MARKETS_PER_CYCLE]:
+        analysed = 0
+        cache_skipped = 0
+        for market in markets:
+            if analysed >= max_per_cycle:
+                break
+
             # Skip markets where we already hold a position
             if market["id"] in state.positions:
                 logger.debug("Already hold position in %s — skipping.", market["id"])
                 continue
 
+            # Skip markets that recently failed a hard gate
+            if rejection_cache and rejection_cache.is_rejected(market["id"]):
+                cache_skipped += 1
+                continue
+
+            analysed += 1
             try:
                 _analyse_and_trade(
                     market=market,
@@ -759,6 +829,7 @@ def scan_cycle(
                     exposure=exposure,
                     drawdown=drawdown,
                     feed=feed,
+                    rejection_cache=rejection_cache,
                 )
                 # Reload after potential trade to get updated exposure/drawdown
                 state = state_manager.load()
@@ -774,14 +845,28 @@ def scan_cycle(
         # even during cycles where no edge was found and no trade was placed.
         state_manager.save(state)
 
+        # Adaptive interval: reschedule based on market density
+        rejected_count = rejection_cache.rejected_count(
+            [m["id"] for m in markets],
+        ) if rejection_cache else 0
+        next_min = _compute_next_interval(len(markets), rejected_count, max_per_cycle)
+
+        if scheduler is not None:
+            try:
+                scheduler.reschedule_job("scan", trigger="interval", minutes=next_min)
+            except Exception:  # noqa: BLE001
+                pass  # keep current interval if reschedule fails
+
         # Per-cycle summary
         open_count = len(state.positions)
         settled_count = sum(1 for t in state.trade_history if t.status == "settled")
         total_pnl = sum(t.pnl for t in state.trade_history if t.status == "settled" and t.pnl is not None)
         logger.info(
-            "Cycle summary | markets=%d positions=%d settled=%d "
+            "Cycle summary | markets=%d analysed=%d cache_skipped=%d "
+            "next_interval=%dmin positions=%d settled=%d "
             "bankroll=%.2f pnl=%.2f exposure=%.2f drawdown=%.2f",
-            len(markets), open_count, settled_count,
+            len(markets), analysed, cache_skipped,
+            next_min, open_count, settled_count,
             state.bankroll, total_pnl, exposure, drawdown,
         )
 
@@ -804,6 +889,7 @@ def main() -> None:
 
     state_manager = StateManager()
     broker = PaperBroker(state_manager, settings)
+    rejection_cache = RejectionCache(ttl_minutes=settings.scanner.rejection_cache_ttl_min)
 
     interval_min = settings.scanner.poll_interval_sec // 60
     scheduler = BackgroundScheduler()
@@ -814,7 +900,12 @@ def main() -> None:
         id="scan",
         max_instances=1,    # prevents overlapping cycles during slow scans
         coalesce=True,      # if a cycle was missed, run once not multiple times
-        kwargs={"state_manager": state_manager, "broker": broker},
+        kwargs={
+            "state_manager": state_manager,
+            "broker": broker,
+            "rejection_cache": rejection_cache,
+            "scheduler": scheduler,
+        },
         next_run_time=datetime.now(),
     )
     scheduler.start()
@@ -837,7 +928,12 @@ def main() -> None:
         if _TRIGGER_SCAN_PATH.exists():
             _TRIGGER_SCAN_PATH.unlink(missing_ok=True)
             logger.info("Manual scan triggered via dashboard.")
-            scan_cycle(state_manager=state_manager, broker=broker)
+            scan_cycle(
+                state_manager=state_manager,
+                broker=broker,
+                rejection_cache=rejection_cache,
+                scheduler=scheduler,
+            )
         time.sleep(1)
 
     logger.info("Shutting down scheduler…")

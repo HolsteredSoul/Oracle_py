@@ -43,6 +43,11 @@ betfair_event_types = [1, 2, 4, 61, 7522, 7524, 7511]
 betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT"]
 betfair_hours_ahead = 72
 betfair_max_market_age_hours = 168
+# Adaptive scheduling — interval adjusts based on market density
+max_markets_per_cycle = 25
+min_interval_min = 10          # floor: never faster than 10 min
+max_interval_min = 45          # ceiling: never slower than 45 min
+rejection_cache_ttl_min = 120  # skip markets that failed hard gates for 2h
 
 [stats]
 football_api = "football-data"
