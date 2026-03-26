@@ -370,9 +370,19 @@ def _canonical_from_index(key_lower: str, index: dict[str, int]) -> str:
 def parse_teams_from_event(event_name: str) -> tuple[str, str] | None:
     """Parse 'Home Team v Away Team' from a Betfair event name.
 
-    Handles separators: ' v ', ' vs ', ' vs. ', ' - '.
+    Handles separators: ' v ', ' vs ', ' vs. ', ' - ', ' @ '.
     Returns (home, away) tuple or None if the format doesn't match.
+    Note: For '@' (US sports), away team is listed first — we swap to (home, away).
     """
+    # Try '@' separator first (US sports: "Away @ Home")
+    if " @ " in event_name:
+        parts = event_name.split(" @ ", maxsplit=1)
+        if len(parts) == 2:
+            away = parts[0].strip()
+            home = parts[1].strip()
+            if home and away:
+                return home, away
+
     parts = re.split(r"\s+(?:vs?\.?|-)\s+", event_name, maxsplit=1)
     if len(parts) == 2:
         home = parts[0].strip()
