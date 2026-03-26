@@ -17,6 +17,7 @@ import logging
 from src.enrichment.team_mapping import resolve_team
 
 from .afl import fetch_afl_stats
+from .baseball import fetch_baseball_stats
 from .basketball import fetch_basketball_stats, get_bb_team_index, get_bb_team_name
 from .football import fetch_football_stats, get_fd_team_index, get_fd_team_name
 from .models import MatchStats, cache_get, cache_set, compute_completeness
@@ -85,6 +86,8 @@ def get_match_stats(
     # Fetch from API
     if sport == "afl":
         stats = fetch_afl_stats(home_canonical, away_canonical)
+    elif sport == "baseball":
+        stats = fetch_baseball_stats(home_canonical, away_canonical)
     else:
         stats = fetch_football_stats(home_canonical, away_canonical)
 

@@ -87,6 +87,60 @@ class TestPredictMatchOdds:
         assert set(probs.keys()) == {"home", "away"}
         assert abs(sum(probs.values()) - 1.0) < 0.001
 
+    def test_baseball_returns_two_outcomes(self):
+        stats = MatchStats(
+            sport="baseball",
+            home_team="New York Yankees",
+            away_team="Boston Red Sox",
+            home_form_pts_per_game=1.6,
+            away_form_pts_per_game=1.2,
+            home_goals_scored_avg=5.2,
+            home_goals_conceded_avg=3.8,
+            away_goals_scored_avg=4.0,
+            away_goals_conceded_avg=4.5,
+            home_league_position=2,
+            away_league_position=8,
+            data_completeness=1.0,
+        )
+        probs = predict_match_odds(stats)
+        assert probs is not None
+        assert "draw" not in probs
+        assert set(probs.keys()) == {"home", "away"}
+        assert abs(sum(probs.values()) - 1.0) < 0.001
+
+    def test_baseball_home_advantage(self):
+        # Equal stats should still show home advantage
+        stats = MatchStats(
+            sport="baseball",
+            home_team="Team A",
+            away_team="Team B",
+            home_form_pts_per_game=1.0,
+            away_form_pts_per_game=1.0,
+            home_goals_scored_avg=4.0,
+            home_goals_conceded_avg=4.0,
+            away_goals_scored_avg=4.0,
+            away_goals_conceded_avg=4.0,
+            data_completeness=0.75,
+        )
+        probs = predict_match_odds(stats)
+        assert probs is not None
+        assert probs["home"] > probs["away"]
+
+    def test_baseball_strong_team_favoured(self):
+        stats = MatchStats(
+            sport="baseball",
+            home_team="Strong Team",
+            away_team="Weak Team",
+            home_goals_scored_avg=6.0,
+            home_goals_conceded_avg=3.0,
+            away_goals_scored_avg=3.0,
+            away_goals_conceded_avg=6.0,
+            data_completeness=0.5,
+        )
+        probs = predict_match_odds(stats)
+        assert probs is not None
+        assert probs["home"] > 0.7  # Strong home team should be heavily favoured
+
     def test_insufficient_data_returns_none(self):
         stats = MatchStats(
             sport="football",

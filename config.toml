@@ -54,6 +54,7 @@ football_api = "football-data"
 football_api_base = "https://api.football-data.org/v4"
 afl_api_base = "https://api.squiggle.com.au"
 basketball_api_base = "https://v1.basketball.api-sports.io"
+mlb_api_base = "https://statsapi.mlb.com/api/v1"
 cache_ttl_hours = 6
 min_data_completeness = 0.5
 

@@ -49,14 +49,16 @@ logger = logging.getLogger(__name__)
 
 # Betfair event type IDs for sport detection
 _EVENT_TYPE_SOCCER = "1"
+_EVENT_TYPE_TENNIS = "2"
+_EVENT_TYPE_CRICKET = "4"
 _EVENT_TYPE_AFL = "61"
+_EVENT_TYPE_BASEBALL = "7511"
 _EVENT_TYPE_BASKETBALL = "7522"
-_EVENT_TYPE_BASKETBALL_US = "7524"
-_EVENT_TYPE_BASKETBALL_OTHER = "7511"
+_EVENT_TYPE_ICE_HOCKEY = "7524"
 # Event types that have team-vs-team stats available
 _STATS_ELIGIBLE_EVENT_TYPES = {
     _EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL,
-    _EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASKETBALL_US, _EVENT_TYPE_BASKETBALL_OTHER,
+    _EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASEBALL,
 }
 
 # Halts all new trade execution when this file exists.
@@ -129,8 +131,10 @@ def _analyse_and_trade(
     if home_team and away_team and event_type_id in _STATS_ELIGIBLE_EVENT_TYPES:
         if event_type_id == _EVENT_TYPE_AFL:
             sport = "afl"
-        elif event_type_id in {_EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASKETBALL_US, _EVENT_TYPE_BASKETBALL_OTHER}:
+        elif event_type_id == _EVENT_TYPE_BASKETBALL:
             sport = "basketball"
+        elif event_type_id == _EVENT_TYPE_BASEBALL:
+            sport = "baseball"
         else:
             sport = "football"
         competition = market.get("competition_name", "")
@@ -218,9 +222,9 @@ def _analyse_and_trade(
     default_prior = p_model if p_model is not None else mid_price
     prior_p = state.priors.get(market_id, default_prior)
 
-    # Halve beta when the statistical model is absent — the LLM sentiment
+    # Reduce beta when the statistical model is absent — the LLM sentiment
     # signal is the only input so it shouldn't be amplified as aggressively.
-    effective_beta = settings.risk.beta if p_model is not None else settings.risk.beta * 0.5
+    effective_beta = settings.risk.beta if p_model is not None else settings.risk.beta * 0.75
     p_fair = update_probability(prior_p, sentiment_delta, effective_beta)
 
     # Sanity gate: extreme divergence from mid_price likely means sign confusion.

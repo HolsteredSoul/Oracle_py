@@ -167,6 +167,43 @@ def _predict_basketball(stats: MatchStats) -> dict[str, float]:
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
+def _predict_baseball(stats: MatchStats) -> dict[str, float]:
+    """Baseball prediction using net run differential + home advantage.
+
+    No draws in baseball. Uses a logistic model based on:
+      - Net run differential (runs scored - runs allowed per game)
+      - Standings position differential
+      - Home-field advantage intercept (~54% historical MLB home win rate)
+    """
+    from scipy.special import expit
+
+    home_scored = stats.home_goals_scored_avg   # runs scored per game
+    home_conceded = stats.home_goals_conceded_avg  # runs allowed per game
+    away_scored = stats.away_goals_scored_avg
+    away_conceded = stats.away_goals_conceded_avg
+
+    # logit(0.54) ≈ 0.16 — MLB home-field advantage intercept
+    logit_p = 0.16
+
+    # Primary signal: net run differential, normalized by 5 (typical MLB range)
+    if (home_scored is not None and home_conceded is not None
+            and away_scored is not None and away_conceded is not None):
+        home_net = home_scored - home_conceded
+        away_net = away_scored - away_conceded
+        net_diff = (home_net - away_net) / 5.0
+        logit_p += 1.5 * net_diff
+
+    # Secondary signal: standings position (lower = better)
+    if stats.home_league_position is not None and stats.away_league_position is not None:
+        standings_diff = (stats.away_league_position - stats.home_league_position)
+        standings_diff_norm = standings_diff / 15.0  # 15 teams per league
+        logit_p += 0.5 * standings_diff_norm
+
+    p_home = float(expit(logit_p))
+    p_home = max(0.05, min(0.95, p_home))
+    return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
+
+
 def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
     """Predict match outcome probabilities from statistical features.
 
@@ -188,6 +225,8 @@ def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
         probs = _predict_afl(stats)
     elif stats.sport == "basketball":
         probs = _predict_basketball(stats)
+    elif stats.sport == "baseball":
+        probs = _predict_baseball(stats)
     else:
         probs = _predict_football(stats)
 
