@@ -343,10 +343,11 @@ def _analyse_and_trade(
     margin_min = settings.triggers.margin_min_paper
     commission = settings.risk.commission_pct
 
-    # Compare commission-adjusted edges against the threshold.
-    # Raw edges that vanish after the 5% commission are not real edges.
-    net_back_edge = back_edge - commission
-    net_lay_edge = lay_edge - commission
+    # Compare raw edges against the threshold.
+    # Commission is already handled in commission_aware_kelly() — no need to
+    # subtract it here (that was double-counting and blocking all trades).
+    net_back_edge = back_edge
+    net_lay_edge = lay_edge
 
     if net_back_edge >= margin_min and net_back_edge >= net_lay_edge:
         direction = "back"
@@ -447,8 +448,8 @@ def _analyse_and_trade(
 
                 back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
                 lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")
-                net_back_edge = back_edge - commission
-                net_lay_edge = lay_edge - commission
+                net_back_edge = back_edge
+                net_lay_edge = lay_edge
 
                 if net_back_edge >= margin_min and net_back_edge >= net_lay_edge:
                     direction = "back"
