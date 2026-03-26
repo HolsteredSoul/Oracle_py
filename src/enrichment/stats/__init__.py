@@ -50,14 +50,17 @@ def get_match_stats(
     Returns None if teams cannot be resolved or API fails.
     Caches results per (home_team, away_team, sport) tuple.
     """
-    # Basketball uses direct name resolution via its own team index
-    if sport == "basketball":
+    # Basketball and baseball use direct name resolution via their own team indexes
+    if sport in ("basketball", "baseball"):
         cached = cache_get(home_team, away_team, sport)
         if cached is not None:
             logger.debug("Stats cache hit: %s v %s (%s)", home_team, away_team, sport)
             return cached
 
-        stats = fetch_basketball_stats(home_team, away_team, competition)
+        if sport == "basketball":
+            stats = fetch_basketball_stats(home_team, away_team, competition)
+        else:
+            stats = fetch_baseball_stats(home_team, away_team)
         if stats is not None:
             cache_set(home_team, away_team, sport, stats)
             logger.info(
