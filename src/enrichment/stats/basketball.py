@@ -83,11 +83,15 @@ def _bb_get(path: str, params: dict | None = None) -> dict | list | None:
 # ---------------------------------------------------------------------------
 
 _BB_LEAGUE_OVERRIDES: dict[str, int] = {
+    # Major leagues
     "nba": 12,
     "ncaa": 116,
     "euroleague": 120,
+    "eurocup": 121,
+    # European national leagues
     "acb": 117,
     "liga acb": 117,
+    "liga endesa": 117,
     "lega a": 136,
     "lega basket serie a": 136,
     "serie a": 136,
@@ -96,14 +100,28 @@ _BB_LEAGUE_OVERRIDES: dict[str, int] = {
     "betclic elite": 130,
     "lkl": 149,
     "bbl": 132,
-    "nbl": 20,
-    "nbb": 177,
-    "sbl": 157,
-    "basketligan": 157,
     "czech nbl": 135,
     "aba league": 142,
     "vtb united league": 150,
     "turkish bsl": 145,
+    "basket league": 45,
+    "greek basket league": 45,
+    "korisliiga": 37,
+    "finnish korisliiga": 37,
+    "plk": 72,
+    "polish plk": 72,
+    "tauron basket liga": 72,
+    "cba": 31,
+    "chinese cba": 31,
+    "kbl": 91,
+    "korean kbl": 91,
+    # Oceania
+    "nbl": 20,
+    "australian nbl": 20,
+    "nbb": 177,
+    # Scandinavian
+    "sbl": 157,
+    "basketligan": 157,
 }
 
 _bb_league_cache: dict[str, int | None] = {}
@@ -123,19 +141,24 @@ def _bb_resolve_league(competition_name: str) -> int | None:
             _bb_league_cache[norm] = lid
             return lid
 
-    data = _bb_get("/leagues", params={"search": competition_name.split()[0]})
-    if data and isinstance(data, dict):
-        results = data.get("response", [])
-        for league in results:
+    # Try searching by each word in the competition name (most specific first)
+    words = [w for w in competition_name.split() if len(w) > 2]
+    for word in words:
+        data = _bb_get("/leagues", params={"search": word})
+        if not data or not isinstance(data, dict):
+            continue
+        for league in data.get("response", []):
             league_name = league.get("name", "").lower()
             league_id = league.get("id")
-            if league_id and (norm in league_name or league_name in norm):
+            league_type = league.get("type", "")
+            # Prefer actual leagues over cups
+            if league_id and league_type == "League" and (norm in league_name or league_name in norm):
                 _bb_league_cache[norm] = league_id
                 logger.info("Resolved basketball league %r -> ID %d", competition_name, league_id)
                 return league_id
 
     _bb_league_cache[norm] = None
-    logger.debug("Could not resolve basketball league: %r", competition_name)
+    logger.info("Could not resolve basketball league for competition=%r", competition_name)
     return None
 
 
@@ -147,15 +170,43 @@ _bb_season_cache: dict[int, str | None] = {}
 
 
 def _bb_current_season(league_id: int) -> str | None:
-    """Get the current season string for a league."""
+    """Get the current season string for a league.
+
+    The /leagues endpoint returns all available seasons. We pick the latest
+    season whose date range covers today (or the most recent past season
+    if none is current). This avoids picking a future season with no data.
+    """
+    import datetime as _dt
+
     data = _bb_get("/leagues", params={"id": league_id})
-    if data and isinstance(data, dict):
-        results = data.get("response", [])
-        if results:
-            seasons = results[0].get("seasons", [])
-            if seasons:
-                return str(seasons[-1].get("season", ""))
-    return None
+    if not data or not isinstance(data, dict):
+        return None
+
+    results = data.get("response", [])
+    if not results:
+        return None
+
+    seasons = results[0].get("seasons", [])
+    if not seasons:
+        return None
+
+    today = _dt.date.today().isoformat()
+
+    # Prefer the season whose start <= today <= end
+    for s in reversed(seasons):
+        start = s.get("start", "")
+        end = s.get("end", "")
+        if start <= today <= end:
+            return str(s.get("season", ""))
+
+    # Fallback: latest season whose start date is in the past
+    for s in reversed(seasons):
+        start = s.get("start", "")
+        if start and start <= today:
+            return str(s.get("season", ""))
+
+    # Last resort: last season in the list
+    return str(seasons[-1].get("season", ""))
 
 
 def _bb_get_season(league_id: int) -> str | None:
@@ -164,6 +215,7 @@ def _bb_get_season(league_id: int) -> str | None:
         return _bb_season_cache[league_id]
     season = _bb_current_season(league_id)
     _bb_season_cache[league_id] = season
+    logger.debug("Basketball season for league %d: %s", league_id, season)
     return season
 
 
@@ -178,19 +230,34 @@ _bb_team_name_casing: dict[int, dict[str, str]] = {}
 
 
 def _bb_build_team_index(league_id: int, season: str) -> None:
-    """Build a team name -> ID index for a league+season."""
+    """Build a team name -> ID index for a league+season.
+
+    If the requested season has no teams (API data not yet populated),
+    falls back to the previous season.
+    """
     if league_id in _bb_team_indexes:
         return
 
     data = _bb_get("/teams", params={"league": league_id, "season": season})
-    if not data or not isinstance(data, dict):
-        _bb_team_indexes[league_id] = {}
-        _bb_team_name_casing[league_id] = {}
-        return
+    teams = data.get("response", []) if data and isinstance(data, dict) else []
+
+    # Fallback: if no teams, try previous season (API often lags on new seasons)
+    if not teams:
+        try:
+            prev_season = str(int(season) - 1)
+        except ValueError:
+            prev_season = None
+        if prev_season:
+            logger.info("No teams for league %d season %s, trying %s", league_id, season, prev_season)
+            data = _bb_get("/teams", params={"league": league_id, "season": prev_season})
+            teams = data.get("response", []) if data and isinstance(data, dict) else []
+            if teams:
+                # Update season cache so form/standings use the correct season
+                _bb_season_cache[league_id] = prev_season
 
     index: dict[str, int] = {}
     casing: dict[str, str] = {}
-    for entry in data.get("response", []):
+    for entry in teams:
         tid = entry.get("id")
         name = entry.get("name", "")
         if tid and name:
@@ -393,6 +460,8 @@ def fetch_basketball_stats(
         return None
 
     _bb_build_team_index(league_id, season)
+    # Re-read season — build_team_index may have fallen back to a previous season
+    season = _bb_season_cache.get(league_id, season)
 
     home_id = _bb_resolve_team_id(home_canonical, league_id)
     away_id = _bb_resolve_team_id(away_canonical, league_id)
