@@ -65,3 +65,7 @@ class TestMatchStatsModel:
     def test_baseball_sport(self):
         stats = MatchStats(sport="baseball", home_team="New York Yankees", away_team="Boston Red Sox")
         assert stats.sport == "baseball"
+
+    def test_rugby_sport(self):
+        stats = MatchStats(sport="rugby", home_team="Hurricanes", away_team="Blues")
+        assert stats.sport == "rugby"

@@ -241,19 +241,21 @@ def _bb_build_team_index(league_id: int, season: str) -> None:
     data = _bb_get("/teams", params={"league": league_id, "season": season})
     teams = data.get("response", []) if data and isinstance(data, dict) else []
 
-    # Fallback: if no teams, try previous season (API often lags on new seasons)
+    # Fallback: try previous seasons if API hasn't populated current one
     if not teams:
         try:
-            prev_season = str(int(season) - 1)
+            year = int(season)
         except ValueError:
-            prev_season = None
-        if prev_season:
-            logger.info("No teams for league %d season %s, trying %s", league_id, season, prev_season)
-            data = _bb_get("/teams", params={"league": league_id, "season": prev_season})
-            teams = data.get("response", []) if data and isinstance(data, dict) else []
-            if teams:
-                # Update season cache so form/standings use the correct season
-                _bb_season_cache[league_id] = prev_season
+            year = None
+        if year:
+            for offset in range(1, 4):  # Try up to 3 years back
+                prev = str(year - offset)
+                logger.info("No teams for league %d season %s, trying %s", league_id, season, prev)
+                data = _bb_get("/teams", params={"league": league_id, "season": prev})
+                teams = data.get("response", []) if data and isinstance(data, dict) else []
+                if teams:
+                    _bb_season_cache[league_id] = prev
+                    break
 
     index: dict[str, int] = {}
     casing: dict[str, str] = {}

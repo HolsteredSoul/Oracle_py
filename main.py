@@ -51,7 +51,9 @@ logger = logging.getLogger(__name__)
 _EVENT_TYPE_SOCCER = "1"
 _EVENT_TYPE_TENNIS = "2"
 _EVENT_TYPE_CRICKET = "4"
+_EVENT_TYPE_RUGBY_UNION = "5"
 _EVENT_TYPE_AFL = "61"
+_EVENT_TYPE_RUGBY_LEAGUE = "1477"
 _EVENT_TYPE_BASEBALL = "7511"
 _EVENT_TYPE_BASKETBALL = "7522"
 _EVENT_TYPE_ICE_HOCKEY = "7524"
@@ -59,6 +61,7 @@ _EVENT_TYPE_ICE_HOCKEY = "7524"
 _STATS_ELIGIBLE_EVENT_TYPES = {
     _EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL,
     _EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASEBALL,
+    _EVENT_TYPE_RUGBY_UNION,
 }
 
 # Halts all new trade execution when this file exists.
@@ -135,6 +138,8 @@ def _analyse_and_trade(
             sport = "basketball"
         elif event_type_id == _EVENT_TYPE_BASEBALL:
             sport = "baseball"
+        elif event_type_id == _EVENT_TYPE_RUGBY_UNION:
+            sport = "rugby"
         else:
             sport = "football"
         competition = market.get("competition_name", "")

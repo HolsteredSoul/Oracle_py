@@ -167,6 +167,44 @@ def _predict_basketball(stats: MatchStats) -> dict[str, float]:
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
+def _predict_rugby(stats: MatchStats) -> dict[str, float]:
+    """Rugby Union prediction using scoring differential + home advantage.
+
+    Uses a logistic model based on:
+      - Net points differential (points scored - conceded per game)
+      - Standings position differential
+      - Home advantage intercept (~56% historical rugby home win rate)
+    Returns home/away only — draws are rare in modern Super Rugby.
+    """
+    from scipy.special import expit
+
+    home_scored = stats.home_goals_scored_avg
+    home_conceded = stats.home_goals_conceded_avg
+    away_scored = stats.away_goals_scored_avg
+    away_conceded = stats.away_goals_conceded_avg
+
+    # logit(0.56) ≈ 0.24 — rugby home advantage intercept
+    logit_p = 0.24
+
+    # Primary: net points differential, normalized by 15 (typical rugby spread)
+    if (home_scored is not None and home_conceded is not None
+            and away_scored is not None and away_conceded is not None):
+        home_net = home_scored - home_conceded
+        away_net = away_scored - away_conceded
+        net_diff = (home_net - away_net) / 15.0
+        logit_p += 1.5 * net_diff
+
+    # Secondary: standings position
+    if stats.home_league_position is not None and stats.away_league_position is not None:
+        standings_diff = (stats.away_league_position - stats.home_league_position)
+        standings_diff_norm = standings_diff / 12.0  # ~12 teams in Super Rugby
+        logit_p += 0.5 * standings_diff_norm
+
+    p_home = float(expit(logit_p))
+    p_home = max(0.05, min(0.95, p_home))
+    return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
+
+
 def _predict_baseball(stats: MatchStats) -> dict[str, float]:
     """Baseball prediction using net run differential + home advantage.
 
@@ -227,6 +265,8 @@ def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
         probs = _predict_basketball(stats)
     elif stats.sport == "baseball":
         probs = _predict_baseball(stats)
+    elif stats.sport == "rugby":
+        probs = _predict_rugby(stats)
     else:
         probs = _predict_football(stats)
 

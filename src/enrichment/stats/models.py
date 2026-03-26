@@ -15,7 +15,7 @@ TIMEOUT = 15.0  # seconds for all stats API requests
 class MatchStats(BaseModel):
     """Statistical features for a single match."""
 
-    sport: Literal["football", "afl", "basketball", "baseball"]
+    sport: Literal["football", "afl", "basketball", "baseball", "rugby"]
     home_team: str
     away_team: str
     # Form (last 5 matches)

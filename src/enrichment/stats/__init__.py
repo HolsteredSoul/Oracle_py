@@ -19,6 +19,7 @@ from src.enrichment.team_mapping import resolve_team
 from .afl import fetch_afl_stats
 from .baseball import fetch_baseball_stats
 from .basketball import fetch_basketball_stats, get_bb_team_index, get_bb_team_name
+from .rugby import fetch_rugby_stats
 from .football import fetch_football_stats, get_fd_team_index, get_fd_team_name
 from .models import MatchStats, cache_get, cache_set, compute_completeness
 
@@ -50,8 +51,8 @@ def get_match_stats(
     Returns None if teams cannot be resolved or API fails.
     Caches results per (home_team, away_team, sport) tuple.
     """
-    # Basketball and baseball use direct name resolution via their own team indexes
-    if sport in ("basketball", "baseball"):
+    # Basketball, baseball, rugby use direct name resolution via their own team indexes
+    if sport in ("basketball", "baseball", "rugby"):
         cached = cache_get(home_team, away_team, sport)
         if cached is not None:
             logger.debug("Stats cache hit: %s v %s (%s)", home_team, away_team, sport)
@@ -59,6 +60,8 @@ def get_match_stats(
 
         if sport == "basketball":
             stats = fetch_basketball_stats(home_team, away_team, competition)
+        elif sport == "rugby":
+            stats = fetch_rugby_stats(home_team, away_team, competition)
         else:
             stats = fetch_baseball_stats(home_team, away_team)
         if stats is not None:

@@ -126,6 +126,42 @@ class TestPredictMatchOdds:
         assert probs is not None
         assert probs["home"] > probs["away"]
 
+    def test_rugby_returns_two_outcomes(self):
+        stats = MatchStats(
+            sport="rugby",
+            home_team="Hurricanes",
+            away_team="Blues",
+            home_form_pts_per_game=1.6,
+            away_form_pts_per_game=1.2,
+            home_goals_scored_avg=30.0,
+            home_goals_conceded_avg=22.0,
+            away_goals_scored_avg=25.0,
+            away_goals_conceded_avg=28.0,
+            home_league_position=1,
+            away_league_position=5,
+            data_completeness=1.0,
+        )
+        probs = predict_match_odds(stats)
+        assert probs is not None
+        assert "draw" not in probs
+        assert set(probs.keys()) == {"home", "away"}
+        assert abs(sum(probs.values()) - 1.0) < 0.001
+
+    def test_rugby_home_advantage(self):
+        stats = MatchStats(
+            sport="rugby",
+            home_team="Team A",
+            away_team="Team B",
+            home_goals_scored_avg=25.0,
+            home_goals_conceded_avg=25.0,
+            away_goals_scored_avg=25.0,
+            away_goals_conceded_avg=25.0,
+            data_completeness=0.5,
+        )
+        probs = predict_match_odds(stats)
+        assert probs is not None
+        assert probs["home"] > probs["away"]
+
     def test_baseball_strong_team_favoured(self):
         stats = MatchStats(
             sport="baseball",

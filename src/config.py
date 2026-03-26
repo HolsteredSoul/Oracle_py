@@ -97,6 +97,7 @@ class StatsConfig(BaseModel):
     afl_api_base: str = "https://api.squiggle.com.au"
     basketball_api_base: str = "https://v1.basketball.api-sports.io"
     mlb_api_base: str = "https://statsapi.mlb.com/api/v1"
+    rugby_api_base: str = "https://v1.rugby.api-sports.io"
     cache_ttl_hours: int = Field(default=6, gt=0)
     min_data_completeness: float = Field(default=0.5, ge=0, le=1.0)
 

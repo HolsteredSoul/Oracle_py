@@ -39,7 +39,7 @@ reject_crossed_book = true
 [scanner]
 poll_interval_sec = 1800
 prob_range = [0.05, 0.95]
-betfair_event_types = [1, 2, 4, 61, 7522, 7524, 7511]
+betfair_event_types = [1, 2, 4, 5, 61, 1477, 7522, 7524, 7511]
 betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT"]
 betfair_hours_ahead = 72
 betfair_max_market_age_hours = 168
@@ -55,6 +55,7 @@ football_api_base = "https://api.football-data.org/v4"
 afl_api_base = "https://api.squiggle.com.au"
 basketball_api_base = "https://v1.basketball.api-sports.io"
 mlb_api_base = "https://statsapi.mlb.com/api/v1"
+rugby_api_base = "https://v1.rugby.api-sports.io"
 cache_ttl_hours = 6
 min_data_completeness = 0.5
 
