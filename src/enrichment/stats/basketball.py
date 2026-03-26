@@ -446,7 +446,18 @@ def fetch_basketball_stats(
     away_canonical: str,
     competition: str = "",
 ) -> MatchStats | None:
-    """Fetch basketball stats from API-Basketball."""
+    """Fetch basketball stats from API-Basketball.
+
+    NOTE: API-Sports free tier only covers 2022-2024 seasons.
+    Current-season data requires a paid plan. This provider is
+    effectively disabled until a paid key is configured or an
+    alternative free API is found.
+    """
+    # API-Sports free tier has no current-season data (2022-2024 only).
+    # Skip entirely to avoid burning 100 daily calls for zero results.
+    logger.debug("API-Basketball disabled — free tier has no current-season data.")
+    return None
+
     if not settings.basketball_api_key:
         logger.debug("No BASKETBALL_API_KEY configured — skipping basketball stats.")
         return None
