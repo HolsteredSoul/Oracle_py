@@ -31,13 +31,19 @@ def make_config(
 # commission_aware_kelly
 # ---------------------------------------------------------------------------
 
-def test_back_zero_edge_returns_zero():
-    # p_fair == q_market + gamma → numerator = 0
-    gamma = 0.05
-    q = 0.50
-    p_fair = q + gamma
-    f = commission_aware_kelly(p_fair, q, gamma, "back")
-    assert f == pytest.approx(0.0)
+def test_back_positive_edge_with_commission():
+    # p=0.55, q=0.50, gamma=0.05 → raw edge 5%
+    # Correct f* = p - (1-p)*q / ((1-q)*(1-gamma))
+    #            = 0.55 - 0.45*0.50 / (0.50*0.95) ≈ 0.0763
+    f = commission_aware_kelly(0.55, 0.50, 0.05, "back")
+    assert f == pytest.approx(0.0763, abs=0.001)
+
+
+def test_back_small_edge_still_positive():
+    # p=0.53, q=0.50, gamma=0.05 → raw edge 3%
+    # Should be positive (old formula wrongly returned negative)
+    f = commission_aware_kelly(0.53, 0.50, 0.05, "back")
+    assert f > 0
 
 
 def test_back_negative_edge_returns_negative():
@@ -54,12 +60,12 @@ def test_back_no_commission_standard_kelly():
     assert f == pytest.approx(expected)
 
 
-def test_lay_zero_edge_returns_zero():
-    gamma = 0.05
-    q = 0.50
-    p_fair = q - gamma
-    f = commission_aware_kelly(p_fair, q, gamma, "lay")
-    assert f == pytest.approx(0.0)
+def test_lay_positive_edge_with_commission():
+    # p=0.45, q=0.50, gamma=0.05 → lay edge 5%
+    # Correct f* = (1-p) - p*(1-q) / (q*(1-gamma))
+    #            = 0.55 - 0.45*0.50 / (0.50*0.95) ≈ 0.0763
+    f = commission_aware_kelly(0.45, 0.50, 0.05, "lay")
+    assert f == pytest.approx(0.0763, abs=0.001)
 
 
 def test_lay_negative_edge_returns_negative():

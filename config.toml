@@ -10,7 +10,7 @@ use_structured_output = true
 [triggers]
 news_sentiment_delta = 0.15
 volatility_z = 2.3
-margin_min_paper = 0.030
+margin_min_paper = 0.020
 margin_min_live = 0.015
 
 [risk]

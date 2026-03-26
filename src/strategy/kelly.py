@@ -35,15 +35,21 @@ def commission_aware_kelly(
         May exceed 1.0 for extreme edges; caller applies scaling + cap.
     """
     if direction == "back":
-        denominator = 1.0 - q_market
+        # Commission-adjusted Kelly for a back bet.
+        # Net odds: b = ((1-q)/q) * (1-gamma)  (payout per unit risked after commission)
+        # f* = p - (1-p)/b
+        denominator = (1.0 - q_market) * (1.0 - gamma)
         if denominator == 0.0:
             return 0.0
-        f_star = (p_fair - q_market - gamma) / denominator
+        f_star = p_fair - (1.0 - p_fair) * q_market / denominator
     else:  # lay
-        denominator = q_market
+        # Commission-adjusted Kelly for a lay bet.
+        # Net odds: b_lay = q*(1-gamma) / (1-q)  (win per unit liability after commission)
+        # f* = (1-p) - p/b_lay
+        denominator = q_market * (1.0 - gamma)
         if denominator == 0.0:
             return 0.0
-        f_star = (q_market - p_fair - gamma) / denominator
+        f_star = (1.0 - p_fair) - p_fair * (1.0 - q_market) / denominator
 
     if f_star > 1.0:
         logger.warning("f* = %.4f > 1.0 — extreme edge signal; hard cap will apply", f_star)
