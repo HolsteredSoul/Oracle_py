@@ -721,13 +721,10 @@ def main() -> None:
 
     st.divider()
 
-    render_scan_feed_panel(scan_feed)
+    # --- Tabs ---
+    tab_overview, tab_scan = st.tabs(["Overview", "Scan Feed"])
 
-    st.divider()
-
-    # --- Charts ---
-    # Derive initial bankroll from the first trade's pre-entry bankroll so the
-    # curve stays correct even after state resets or non-default starting values.
+    # Precompute shared data before tabs
     if trade_history:
         initial_bankroll = trade_history[0].get("bankroll_before", bankroll)
     else:
@@ -735,24 +732,29 @@ def main() -> None:
     equity_df = compute_equity_curve(trade_history, initial_bankroll, current_equity=equity)
     cash_df = compute_cash_curve(trade_history, initial_bankroll, current_cash=bankroll)
 
-    left, right = st.columns(2)
-    with left:
-        render_equity_panel(equity_df)
-    with right:
-        render_cash_panel(cash_df)
+    with tab_overview:
+        # --- Charts ---
+        left, right = st.columns(2)
+        with left:
+            render_equity_panel(equity_df)
+        with right:
+            render_cash_panel(cash_df)
 
-    render_pnl_panel(trade_history)
-    render_clv_panel(trade_history)    # Phase 5A.1
+        render_pnl_panel(trade_history)
+        render_clv_panel(trade_history)    # Phase 5A.1
 
-    st.divider()
+        st.divider()
 
-    render_position_table(positions, trade_history)
-    render_trade_log(trade_history)
+        render_position_table(positions, trade_history)
+        render_trade_log(trade_history)
 
-    st.divider()
+        st.divider()
 
-    render_llm_cost_panel(spend)
-    render_realism_panel()       # Phase 4C
+        render_llm_cost_panel(spend)
+        render_realism_panel()       # Phase 4C
+
+    with tab_scan:
+        render_scan_feed_panel(scan_feed)
 
     # --- Auto-refresh ---
     time.sleep(_REFRESH_INTERVAL_SEC)

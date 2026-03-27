@@ -62,7 +62,8 @@ _EVENT_TYPE_ICE_HOCKEY = "7524"
 _STATS_ELIGIBLE_EVENT_TYPES = {
     _EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL,
     _EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASEBALL,
-    _EVENT_TYPE_RUGBY_UNION,
+    _EVENT_TYPE_RUGBY_UNION, _EVENT_TYPE_ICE_HOCKEY,
+    _EVENT_TYPE_CRICKET, _EVENT_TYPE_RUGBY_LEAGUE,
 }
 
 # Halts all new trade execution when this file exists.
@@ -141,6 +142,12 @@ def _analyse_and_trade(
             sport = "baseball"
         elif event_type_id == _EVENT_TYPE_RUGBY_UNION:
             sport = "rugby"
+        elif event_type_id == _EVENT_TYPE_ICE_HOCKEY:
+            sport = "hockey"
+        elif event_type_id == _EVENT_TYPE_CRICKET:
+            sport = "cricket"
+        elif event_type_id == _EVENT_TYPE_RUGBY_LEAGUE:
+            sport = "rugby_league"
         else:
             sport = "football"
         competition = market.get("competition_name", "")

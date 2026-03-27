@@ -27,6 +27,15 @@ _AFL_HOME_ADVANTAGE = 0.57
 # Basketball home-court advantage (historical ~57%, varies by league)
 _BASKETBALL_HOME_ADVANTAGE = 0.57
 
+# Hockey home-ice advantage (historical ~55%)
+_HOCKEY_HOME_ADVANTAGE = 0.55
+
+# Rugby League home advantage (historical ~58%, NRL is heavily home-biased)
+_RUGBY_LEAGUE_HOME_ADVANTAGE = 0.58
+
+# Cricket home advantage (historical ~55% in limited-overs, higher in Tests)
+_CRICKET_HOME_ADVANTAGE = 0.55
+
 
 def _poisson_match_probs(
     lambda_home: float,
@@ -242,6 +251,115 @@ def _predict_baseball(stats: MatchStats) -> dict[str, float]:
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
+def _predict_hockey(stats: MatchStats) -> dict[str, float]:
+    """Ice hockey prediction using goal differential + home-ice advantage.
+
+    Uses a Poisson model for goals (like football but with hockey-specific lambdas).
+    Hockey has OT/shootout so draws in regulation are possible but rare on Betfair
+    (most markets are for regulation + OT result). We model home/away only.
+    """
+    from scipy.special import expit
+
+    home_scored = stats.home_goals_scored_avg
+    home_conceded = stats.home_goals_conceded_avg
+    away_scored = stats.away_goals_scored_avg
+    away_conceded = stats.away_goals_conceded_avg
+
+    # logit(0.55) ≈ 0.20 — home-ice advantage intercept
+    logit_p = 0.20
+
+    # Primary: net goal differential, normalized by 3 (typical NHL spread range)
+    if (home_scored is not None and home_conceded is not None
+            and away_scored is not None and away_conceded is not None):
+        home_net = home_scored - home_conceded
+        away_net = away_scored - away_conceded
+        net_diff = (home_net - away_net) / 3.0
+        logit_p += 1.5 * net_diff
+
+    # Secondary: standings position
+    if stats.home_league_position is not None and stats.away_league_position is not None:
+        standings_diff = (stats.away_league_position - stats.home_league_position)
+        standings_diff_norm = standings_diff / 16.0  # ~16 teams per conference
+        logit_p += 0.5 * standings_diff_norm
+
+    p_home = float(expit(logit_p))
+    p_home = max(0.05, min(0.95, p_home))
+    return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
+
+
+def _predict_cricket(stats: MatchStats) -> dict[str, float]:
+    """Cricket prediction using run differential + home advantage.
+
+    No draws in limited-overs cricket. Uses a logistic model based on:
+      - Net run rate differential (runs scored - runs conceded per match)
+      - Form differential
+      - Home advantage intercept (~55% historical)
+    """
+    from scipy.special import expit
+
+    home_scored = stats.home_goals_scored_avg   # runs scored per match
+    home_conceded = stats.home_goals_conceded_avg
+    away_scored = stats.away_goals_scored_avg
+    away_conceded = stats.away_goals_conceded_avg
+
+    # logit(0.55) ≈ 0.20
+    logit_p = 0.20
+
+    # Primary: net run differential, normalized by 50 (typical T20 margin range)
+    if (home_scored is not None and home_conceded is not None
+            and away_scored is not None and away_conceded is not None):
+        home_net = home_scored - home_conceded
+        away_net = away_scored - away_conceded
+        net_diff = (home_net - away_net) / 50.0
+        logit_p += 1.5 * net_diff
+
+    # Form differential as secondary signal
+    if stats.home_form_pts_per_game is not None and stats.away_form_pts_per_game is not None:
+        form_diff = (stats.home_form_pts_per_game - stats.away_form_pts_per_game) / 2.0
+        logit_p += 0.5 * form_diff
+
+    p_home = float(expit(logit_p))
+    p_home = max(0.05, min(0.95, p_home))
+    return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
+
+
+def _predict_rugby_league(stats: MatchStats) -> dict[str, float]:
+    """Rugby League (NRL) prediction using scoring differential + home advantage.
+
+    Uses a logistic model based on:
+      - Net points differential (points scored - conceded per game)
+      - Standings position differential
+      - Home advantage intercept (~58% historical NRL home win rate)
+    """
+    from scipy.special import expit
+
+    home_scored = stats.home_goals_scored_avg
+    home_conceded = stats.home_goals_conceded_avg
+    away_scored = stats.away_goals_scored_avg
+    away_conceded = stats.away_goals_conceded_avg
+
+    # logit(0.58) ≈ 0.32 — NRL has strong home advantage
+    logit_p = 0.32
+
+    # Primary: net points differential, normalized by 15 (typical NRL spread)
+    if (home_scored is not None and home_conceded is not None
+            and away_scored is not None and away_conceded is not None):
+        home_net = home_scored - home_conceded
+        away_net = away_scored - away_conceded
+        net_diff = (home_net - away_net) / 15.0
+        logit_p += 1.5 * net_diff
+
+    # Secondary: standings position
+    if stats.home_league_position is not None and stats.away_league_position is not None:
+        standings_diff = (stats.away_league_position - stats.home_league_position)
+        standings_diff_norm = standings_diff / 8.0  # ~16 teams, midpoint ~8
+        logit_p += 0.5 * standings_diff_norm
+
+    p_home = float(expit(logit_p))
+    p_home = max(0.05, min(0.95, p_home))
+    return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
+
+
 def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
     """Predict match outcome probabilities from statistical features.
 
@@ -267,6 +385,12 @@ def predict_match_odds(stats: MatchStats) -> dict[str, float] | None:
         probs = _predict_baseball(stats)
     elif stats.sport == "rugby":
         probs = _predict_rugby(stats)
+    elif stats.sport == "hockey":
+        probs = _predict_hockey(stats)
+    elif stats.sport == "cricket":
+        probs = _predict_cricket(stats)
+    elif stats.sport == "rugby_league":
+        probs = _predict_rugby_league(stats)
     else:
         probs = _predict_football(stats)
 

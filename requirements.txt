@@ -8,6 +8,7 @@ pydantic>=2.7
 pydantic-settings>=2.3
 python-dotenv>=1.0
 scipy>=1.13
+nba_api>=1.11
 toml>=0.10
 betfairlightweight>=2.20
 pytest>=8.2

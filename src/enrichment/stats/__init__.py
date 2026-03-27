@@ -3,7 +3,11 @@
 Fetches team form, goals, standings, and H2H data from:
   - football-data.org (football/soccer) — free tier, 10 req/min
   - Squiggle API (AFL) — free, JSON-based
-  - API-Basketball (api-sports.io) — free tier, 100 req/day
+  - nba_api (NBA) — free, no key required
+  - NHL API (ice hockey) — free, no key required
+  - CricketData.org (cricket) — free, key required
+  - TheSportsDB (NRL/rugby league) — free, no key required
+  - API-Sports (rugby union) — free tier, 100 req/day
 
 Returns MatchStats objects consumed by src/strategy/statistical_model.py.
 Caches results in memory with configurable TTL (default 6 hours).
@@ -19,7 +23,10 @@ from src.enrichment.team_mapping import resolve_team
 from .afl import fetch_afl_stats
 from .baseball import fetch_baseball_stats
 from .basketball import fetch_basketball_stats, get_bb_team_index, get_bb_team_name
+from .cricket import fetch_cricket_stats
+from .hockey import fetch_hockey_stats
 from .rugby import fetch_rugby_stats
+from .rugby_league import fetch_rugby_league_stats
 from .football import fetch_football_stats, get_fd_team_index, get_fd_team_name
 from .models import MatchStats, cache_get, cache_set, compute_completeness
 
@@ -38,6 +45,9 @@ __all__ = [
     "_compute_completeness",
 ]
 
+# Sports that use direct name resolution (no Betfair -> canonical mapping)
+_DIRECT_RESOLUTION_SPORTS = {"basketball", "baseball", "rugby", "hockey", "cricket", "rugby_league"}
+
 
 def get_match_stats(
     home_team: str,
@@ -47,12 +57,12 @@ def get_match_stats(
 ) -> MatchStats | None:
     """Fetch statistical features for an upcoming match.
 
-    Routes to football-data.org, Squiggle, or API-Basketball based on sport.
+    Routes to the correct provider based on sport string.
     Returns None if teams cannot be resolved or API fails.
     Caches results per (home_team, away_team, sport) tuple.
     """
-    # Basketball, baseball, rugby use direct name resolution via their own team indexes
-    if sport in ("basketball", "baseball", "rugby"):
+    # Sports with direct name resolution via their own team indexes
+    if sport in _DIRECT_RESOLUTION_SPORTS:
         cached = cache_get(home_team, away_team, sport)
         if cached is not None:
             logger.debug("Stats cache hit: %s v %s (%s)", home_team, away_team, sport)
@@ -62,6 +72,12 @@ def get_match_stats(
             stats = fetch_basketball_stats(home_team, away_team, competition)
         elif sport == "rugby":
             stats = fetch_rugby_stats(home_team, away_team, competition)
+        elif sport == "hockey":
+            stats = fetch_hockey_stats(home_team, away_team, competition)
+        elif sport == "cricket":
+            stats = fetch_cricket_stats(home_team, away_team, competition)
+        elif sport == "rugby_league":
+            stats = fetch_rugby_league_stats(home_team, away_team, competition)
         else:
             stats = fetch_baseball_stats(home_team, away_team)
         if stats is not None:

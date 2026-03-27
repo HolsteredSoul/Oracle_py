@@ -56,6 +56,9 @@ afl_api_base = "https://api.squiggle.com.au"
 basketball_api_base = "https://v1.basketball.api-sports.io"
 mlb_api_base = "https://statsapi.mlb.com/api/v1"
 rugby_api_base = "https://v1.rugby.api-sports.io"
+nhl_api_base = "https://api-web.nhle.com/v1"
+cricket_api_base = "https://api.cricapi.com/v1"
+nrl_api_base = "https://www.thesportsdb.com/api/v1/json/3"
 cache_ttl_hours = 6
 min_data_completeness = 0.5
 

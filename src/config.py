@@ -98,6 +98,9 @@ class StatsConfig(BaseModel):
     basketball_api_base: str = "https://v1.basketball.api-sports.io"
     mlb_api_base: str = "https://statsapi.mlb.com/api/v1"
     rugby_api_base: str = "https://v1.rugby.api-sports.io"
+    nhl_api_base: str = "https://api-web.nhle.com/v1"
+    cricket_api_base: str = "https://api.cricapi.com/v1"
+    nrl_api_base: str = "https://www.thesportsdb.com/api/v1/json/3"
     cache_ttl_hours: int = Field(default=6, gt=0)
     min_data_completeness: float = Field(default=0.5, ge=0, le=1.0)
 
@@ -150,6 +153,7 @@ class Settings(BaseSettings):
     newsdata_api_key: str = ""
     football_data_api_key: str = ""
     basketball_api_key: str = ""
+    cricket_api_key: str = ""
     betfair_username: str = ""
     betfair_password: str = ""
     betfair_app_key: str = ""
