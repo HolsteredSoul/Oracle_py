@@ -71,6 +71,9 @@ def rewrite_query(
     # Start from the question, strip the runner suffix (after " — ")
     base = question.split(" — ")[0].strip()
 
+    # Strip parenthesised substrings (e.g. pitcher names like "(J Ryan)")
+    base = re.sub(r"\([^)]*\)?", "", base).strip()
+
     # Split on whitespace and slashes
     tokens_orig = re.split(r"[\s/]+", base)
     tokens_lower = [t.lower() for t in tokens_orig]

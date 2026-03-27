@@ -14,13 +14,14 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from src.config import settings
+from src.config import PROJECT_ROOT, settings
 from src.enrichment.news import get_news_summary, rewrite_query
 from src.enrichment.stats import get_match_stats
 from src.enrichment.trigger import should_trigger_deep
@@ -919,9 +920,19 @@ def main() -> None:
         next_run_time=datetime.now(),
     )
     scheduler.start()
+
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(PROJECT_ROOT),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        commit = "unknown"
+
     logger.info(
-        "Oracle agent started | data=Betfair AU (paper) interval=%d min | Ctrl+C to stop.",
-        interval_min,
+        "Oracle agent started | version=%s data=Betfair AU (paper) interval=%d min | Ctrl+C to stop.",
+        commit, interval_min,
     )
 
     stop = False

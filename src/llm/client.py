@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,14 @@ def _save_spend(data: dict[str, Any]) -> None:
     _SPEND_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = _SPEND_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(_SPEND_FILE)
+    for attempt in range(3):
+        try:
+            tmp.replace(_SPEND_FILE)
+            return
+        except OSError:
+            if attempt < 2:
+                time.sleep(0.1)
+    logger.warning("Failed to save LLM spend after 3 attempts")
 
 
 def _get_today_spend() -> float:
@@ -245,6 +253,14 @@ def call_llm(
     try:
         return json.loads(content)
     except json.JSONDecodeError:
+        # Try extracting JSON object from prose wrapper
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(content[start:end + 1])
+            except json.JSONDecodeError:
+                pass
         logger.error("LLM returned non-JSON content: %s", content[:300])
         return None
 
