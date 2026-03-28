@@ -165,6 +165,20 @@ def _analyse_and_trade(
                     )
             stats_context = format_stats_context(match_stats)
 
+    # --- No-model gate: require a statistical model to trade ---
+    # LLM-only probability estimates have no edge over the market.
+    # Without a calibrated model anchor, skip the market entirely.
+    if p_model is None:
+        logger.info(
+            "No model gate | market=%s question=%s — skipping (no statistical model)",
+            market_id, question[:80],
+        )
+        if feed:
+            feed.log_market(market_id, question, "skipped_no_model", reason="no statistical model")
+        if rejection_cache:
+            rejection_cache.reject(market_id, "skipped_no_model")
+        return
+
     # --- Enrichment ---
     search_query = rewrite_query(question, runner_name=runner_name, market_type=market_type)
     news = get_news_summary(search_query)
@@ -239,6 +253,18 @@ def _analyse_and_trade(
     # signal is the only input so it shouldn't be amplified as aggressively.
     effective_beta = settings.risk.beta if p_model is not None else settings.risk.beta * 0.75
     p_fair = update_probability(prior_p, sentiment_delta, effective_beta)
+
+    # Cap LLM adjustment: the LLM is a fine-tuner, not a probability generator.
+    # It should only shift p_fair by a small amount relative to the statistical model.
+    _MAX_LLM_ADJUSTMENT = 0.05
+    if p_model is not None:
+        p_fair_uncapped = p_fair
+        p_fair = max(p_model - _MAX_LLM_ADJUSTMENT, min(p_model + _MAX_LLM_ADJUSTMENT, p_fair))
+        if abs(p_fair - p_fair_uncapped) > 1e-6:
+            logger.debug(
+                "LLM adjustment capped | market=%s p_model=%.3f uncapped=%.3f capped=%.3f",
+                market_id, p_model, p_fair_uncapped, p_fair,
+            )
 
     # Sanity gate: extreme divergence from mid_price likely means sign confusion.
     # (e.g. LLM returns negative delta for "Under X Goals" at low implied prob.)
@@ -497,11 +523,8 @@ def _analyse_and_trade(
     # --- Kelly sizing ---
     conf_score = PaperBroker.derive_conf_score(uncertainty_penalty)
 
-    # Penalise confidence when the statistical model couldn't anchor p_fair.
-    # Without a model, the LLM is trading blind — halve confidence so Kelly
-    # produces smaller positions on low-information markets.
-    if p_model is None:
-        conf_score *= 0.50
+    # Note: p_model is always non-None here (no-model gate above).
+    # The confidence penalty for model-absent markets is no longer needed.
 
     f_star = commission_aware_kelly(
         p_fair, q_market, settings.risk.commission_pct, direction
