@@ -35,6 +35,8 @@ slippage_factor = 0.10
 allow_in_play = false
 # Crossed-book detection — skip if best_back < best_lay (stale/suspended data)
 reject_crossed_book = true
+# Max new positions opened per scan cycle (prevents concentration spikes)
+max_new_positions_per_cycle = 3
 
 [scanner]
 poll_interval_sec = 1800

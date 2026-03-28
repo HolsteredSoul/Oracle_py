@@ -542,6 +542,7 @@ class PaperBroker:
                     "commission_paid": round(commission_paid, 4),
                     "closing_price": closing_price,      # Phase 5A.1
                     "clv": clv,                          # Phase 5A.1
+                    "clv_snapshot_stale": position.clv_snapshot_stale,
                     "runner_status": runner_status,       # raw Betfair status
                     "resolution": resolution,             # mapped YES/NO/VOID/MKT
                 })
@@ -622,6 +623,7 @@ class PaperBroker:
                     "commission_paid": 0.0,
                     "closing_price": closing_price,
                     "clv": clv,
+                    "clv_snapshot_stale": position.clv_snapshot_stale,
                 })
                 state.trade_history[i] = updated
                 cancelled_trade = updated

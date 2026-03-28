@@ -75,6 +75,7 @@ class Trade(BaseModel):
     selection_id: Optional[int] = None              # Betfair runner selection ID
     runner_status: Optional[str] = None             # raw Betfair runner status (WINNER/LOSER/REMOVED)
     resolution: Optional[str] = None                # mapped resolution (YES/NO/VOID/MKT)
+    clv_snapshot_stale: Optional[bool] = None       # True = closing line was never captured pre-play
 
 
 class Position(BaseModel):
@@ -94,6 +95,8 @@ class Position(BaseModel):
     selection_id: Optional[int] = None               # Betfair runner selection ID
     # Phase 5A.1 — updated each scan cycle; becomes closing_price at settlement
     last_seen_price: Optional[float] = None
+    # True when market went in-play before CLV snapshot captured a pre-play price
+    clv_snapshot_stale: bool = False
 
 
 class OracleState(BaseModel):
@@ -211,20 +214,28 @@ class StateManager:
     # ------------------------------------------------------------------
 
     def current_exposure(self, state: OracleState) -> float:
-        """Sum of risk exposure across all open positions (fraction of bankroll).
+        """Sum of risk exposure across all open positions (fraction of equity).
 
-        For back bets the risk is the stake (== filled_size * bankroll).
-        For lay bets the risk is the liability, not the (potentially huge) stake.
+        Uses equity (cash + deployed capital) as the denominator so that
+        opening new positions doesn't shrink the denominator and inflate
+        the apparent exposure of earlier positions.
+
+        For back bets the risk is stake_abs.
+        For lay bets the risk is liability_abs.
         """
-        if state.bankroll <= 0:
-            return 0.0
-        total = 0.0
+        total_risk = 0.0
+        total_deployed = 0.0
         for p in state.positions.values():
             if p.direction == "lay":
-                total += p.liability_abs / state.bankroll
+                total_risk += p.liability_abs
+                total_deployed += p.liability_abs
             else:
-                total += p.filled_size
-        return total
+                total_risk += p.stake_abs
+                total_deployed += p.stake_abs
+        equity = state.bankroll + total_deployed
+        if equity <= 0:
+            return 0.0
+        return total_risk / equity
 
     def drawdown_pct(self, state: OracleState) -> float:
         """Current drawdown fraction: (peak - bankroll) / peak.

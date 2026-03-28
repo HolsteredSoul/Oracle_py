@@ -574,6 +574,62 @@ def _analyse_and_trade(
 
 
 # ---------------------------------------------------------------------------
+# CLV closing-line snapshot
+# ---------------------------------------------------------------------------
+
+def _update_closing_lines(*, state_manager: StateManager) -> None:
+    """Lightweight job that snapshots pre-play prices for open positions.
+
+    Runs every ~5 minutes (separate from the main scan cycle) so that
+    ``last_seen_price`` closely approximates the true closing line when
+    the market eventually goes in-play.  Only calls ``get_market_detail``
+    for markets we actually hold — typically 0-5 API calls per run.
+    """
+    state = state_manager.load()
+    if not state.positions:
+        return  # nothing to snapshot — zero API calls
+
+    dirty = False
+    for market_id, pos in list(state.positions.items()):
+        try:
+            detail = betfair_scanner.get_market_detail(market_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "CLV snapshot | market=%s fetch failed: %s", market_id, exc,
+            )
+            continue
+
+        raw_prob = detail.get("raw_probability")
+        is_inplay = detail.get("inplay", False)
+        is_resolved = detail.get("isResolved", False)
+
+        if raw_prob is not None and not is_inplay and not is_resolved:
+            pos.last_seen_price = raw_prob
+            dirty = True
+            logger.debug(
+                "CLV snapshot | market=%s price=%.4f inplay=%s",
+                market_id, raw_prob, is_inplay,
+            )
+        elif is_inplay and not pos.clv_snapshot_stale:
+            # Market went in-play — check if we ever captured a real
+            # pre-play price (i.e. last_seen_price differs from entry).
+            if (
+                pos.last_seen_price is None
+                or abs(pos.last_seen_price - pos.entry_price) < 1e-6
+            ):
+                pos.clv_snapshot_stale = True
+                dirty = True
+                logger.warning(
+                    "CLV snapshot | market=%s went in-play before a "
+                    "pre-play closing line was captured — CLV will be stale.",
+                    market_id,
+                )
+
+    if dirty:
+        state_manager.save(state)
+
+
+# ---------------------------------------------------------------------------
 # Scan cycle
 # ---------------------------------------------------------------------------
 
@@ -625,11 +681,15 @@ def _settle_betfair_positions(
             )
             continue
 
-        # Phase 5A.1: always update last_seen_price while market is still open.
+        # Phase 5A.1: update last_seen_price while market is pre-play and unresolved.
         # This becomes the closing_price approximation at settlement.
         # Use raw_probability to avoid writing the 0.5 fallback as a real price.
+        # IMPORTANT: Do NOT update once in-play — in-play prices reflect live game
+        # state (near 1.0 for likely winners) and are not valid closing line values.
+        # CLV should measure whether our entry beat the last pre-kickoff price.
         raw_prob = detail.get("raw_probability")
-        if raw_prob is not None and not detail.get("isResolved"):
+        is_inplay = detail.get("inplay", False)
+        if raw_prob is not None and not detail.get("isResolved") and not is_inplay:
             state.positions[market_id].last_seen_price = raw_prob
 
         # Backfill market_start_time for positions opened before this field existed
@@ -823,8 +883,17 @@ def scan_cycle(
 
         analysed = 0
         cache_skipped = 0
+        new_trades_this_cycle = 0
+        max_new_trades = settings.risk.max_new_positions_per_cycle
         for market in markets:
             if analysed >= max_per_cycle:
+                break
+
+            if new_trades_this_cycle >= max_new_trades:
+                logger.info(
+                    "Per-cycle position cap reached (%d) — skipping remaining markets.",
+                    max_new_trades,
+                )
                 break
 
             # Skip markets where we already hold a position
@@ -838,6 +907,7 @@ def scan_cycle(
                 continue
 
             analysed += 1
+            positions_before = len(state.positions)
             try:
                 _analyse_and_trade(
                     market=market,
@@ -853,6 +923,8 @@ def scan_cycle(
                 state = state_manager.load()
                 exposure = state_manager.current_exposure(state)
                 drawdown = state_manager.drawdown_pct(state)
+                if len(state.positions) > positions_before:
+                    new_trades_this_cycle += 1
 
             except Exception as exc:  # noqa: BLE001
                 logger.error("Error analysing market %s: %s", market.get("id"), exc)
@@ -925,6 +997,16 @@ def main() -> None:
             "scheduler": scheduler,
         },
         next_run_time=datetime.now(),
+    )
+    scheduler.add_job(
+        _update_closing_lines,
+        "interval",
+        minutes=5,
+        id="clv_snapshot",
+        max_instances=1,
+        coalesce=True,
+        kwargs={"state_manager": state_manager},
+        next_run_time=None,  # first scan_cycle sets initial prices
     )
     scheduler.start()
 

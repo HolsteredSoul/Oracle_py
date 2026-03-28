@@ -329,20 +329,86 @@ def render_clv_panel(trade_history: list[dict]) -> None:
     df = df.sort_values("timestamp").reset_index(drop=True)
     _df_timestamps_to_local(df)
 
-    avg_clv = df["clv"].mean()
-    total_trades_clv = len(df)
-    positive_clv_pct = (df["clv"] > 0).sum() / total_trades_clv * 100
-    cumulative_clv = df["clv"].cumsum()
+    # Flag trades with unreliable closing-line data.
+    # Two independent signals:
+    #   1. clv_snapshot_stale: market went in-play before CLV snapshot job
+    #      captured any pre-play price (closing line ≈ entry price → CLV ≈ 0).
+    #   2. Drift heuristic: closing_price drifted far from fill_price — likely
+    #      contaminated by in-play prices captured during a scan cycle.
+    _CLV_DRIFT_THRESHOLD = 0.20
+    if "clv_snapshot_stale" in df.columns:
+        df["stale_snapshot"] = df["clv_snapshot_stale"].fillna(False).infer_objects(copy=False).astype(bool)
+    else:
+        df["stale_snapshot"] = False
+
+    if "fill_price" in df.columns and "closing_price" in df.columns:
+        df["suspect_drift"] = (df["closing_price"] - df["fill_price"]).abs() > _CLV_DRIFT_THRESHOLD
+    else:
+        df["suspect_drift"] = False
+
+    df["suspect_inplay"] = df["stale_snapshot"] | df["suspect_drift"]
+
+    n_suspect = df["suspect_inplay"].sum()
+    n_stale = df["stale_snapshot"].sum()
+    n_drift = df["suspect_drift"].sum()
+    # Compute metrics excluding suspect trades when possible
+    clean = df[~df["suspect_inplay"]]
+    has_clean = len(clean) > 0
+    if has_clean:
+        avg_clv = clean["clv"].mean()
+        total_trades_clv = len(clean)
+        positive_clv_pct = (clean["clv"] > 0).sum() / total_trades_clv * 100
+    else:
+        avg_clv = 0.0
+        total_trades_clv = 0
+        positive_clv_pct = 0.0
+    # Build cumulative CLV from clean trades only, keeping their original
+    # 1-based trade indices so the line aligns with the bar chart x-axis.
+    clean_indices = [i + 1 for i, suspect in enumerate(df["suspect_inplay"]) if not suspect]
+    cumulative_clv = df.loc[~df["suspect_inplay"], "clv"].cumsum() if has_clean else None
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Avg CLV", f"{avg_clv:+.4f}",
-                delta="Edge detected" if avg_clv > 0 else "No edge",
-                delta_color="normal" if avg_clv > 0 else "inverse")
-    col2.metric("CLV+ Rate", f"{positive_clv_pct:.0f}%",
-                delta=f"{total_trades_clv} trades")
-    col3.metric("Cumulative CLV", f"{cumulative_clv.iloc[-1]:+.4f}")
+    if has_clean:
+        col1.metric("Avg CLV", f"{avg_clv:+.4f}",
+                    delta="Edge detected" if avg_clv > 0 else "No edge",
+                    delta_color="normal" if avg_clv > 0 else "inverse")
+        col2.metric("CLV+ Rate", f"{positive_clv_pct:.0f}%",
+                    delta=f"{total_trades_clv} trades")
+        col3.metric("Cumulative CLV", f"{cumulative_clv.iloc[-1]:+.4f}" if cumulative_clv is not None and len(cumulative_clv) > 0 else "+0.0000")
+    else:
+        col1.metric("Avg CLV", "N/A")
+        col2.metric("CLV+ Rate", "N/A")
+        col3.metric("Cumulative CLV", "N/A")
 
-    colors = ["#00CC96" if c > 0 else "#EF553B" for c in df["clv"]]
+    if n_suspect > 0:
+        parts = []
+        if n_stale > 0:
+            parts.append(f"{n_stale} with no pre-play snapshot")
+        if n_drift > 0:
+            parts.append(f"{n_drift} with price drift > {_CLV_DRIFT_THRESHOLD:.0%}")
+        if has_clean:
+            st.warning(
+                f"{n_suspect} trade(s) excluded ({', '.join(parts)}). "
+                f"Metrics above reflect only reliable pre-kickoff CLV."
+            )
+        else:
+            st.error(
+                f"All {n_suspect} settled trade(s) have unreliable CLV data "
+                f"({', '.join(parts)}). No reliable metrics available yet."
+            )
+
+    # Grey out suspect trades; green/red for clean
+    colors = []
+    for _, row in df.iterrows():
+        if row["stale_snapshot"]:
+            colors.append("#CCCCCC")  # lighter grey — no closing line captured
+        elif row["suspect_drift"]:
+            colors.append("#AAAAAA")  # darker grey — drift heuristic
+        elif row["clv"] > 0:
+            colors.append("#00CC96")
+        else:
+            colors.append("#EF553B")
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=list(range(1, len(df) + 1)),
@@ -350,14 +416,15 @@ def render_clv_panel(trade_history: list[dict]) -> None:
         marker_color=colors,
         name="Trade CLV",
     ))
-    fig.add_trace(go.Scatter(
-        x=list(range(1, len(df) + 1)),
-        y=cumulative_clv,
-        mode="lines",
-        line=dict(color="#636EFA", width=2),
-        name="Cumulative CLV",
-        yaxis="y2",
-    ))
+    if cumulative_clv is not None and len(cumulative_clv) > 0:
+        fig.add_trace(go.Scatter(
+            x=clean_indices,
+            y=cumulative_clv,
+            mode="lines",
+            line=dict(color="#636EFA", width=2),
+            name="Cumulative CLV (clean)",
+            yaxis="y2",
+        ))
     fig.update_layout(
         xaxis_title="Trade #",
         yaxis_title="CLV",

@@ -213,12 +213,17 @@ class TestCurrentExposure:
         state = OracleState()
         state.positions["mkt-1"] = _make_position("mkt-1", filled_size=0.05)
         state.positions["mkt-2"] = _make_position("mkt-2", filled_size=0.10)
+        # Simulate bankroll reduction from escrowing stakes (as production does)
+        state.bankroll -= 0.05 * DEFAULT_BANKROLL + 0.10 * DEFAULT_BANKROLL
+        # exposure = total_risk / equity = 150 / 1000 = 0.15
         assert sm.current_exposure(state) == pytest.approx(0.15)
 
     def test_single_position(self, tmp_path):
         sm = _make_sm(tmp_path)
         state = OracleState()
         state.positions["mkt-1"] = _make_position(filled_size=0.08)
+        state.bankroll -= 0.08 * DEFAULT_BANKROLL
+        # exposure = 80 / 1000 = 0.08
         assert sm.current_exposure(state) == pytest.approx(0.08)
 
 

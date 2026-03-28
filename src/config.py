@@ -61,6 +61,7 @@ class RiskConfig(BaseModel):
     slippage_factor: float = Field(default=0.10, ge=0)
     allow_in_play: bool = False
     reject_crossed_book: bool = True
+    max_new_positions_per_cycle: int = Field(default=3, ge=1)
 
 
 class ScannerConfig(BaseModel):

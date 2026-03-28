@@ -179,6 +179,7 @@ def call_llm(
     prompt: str,
     tier: str = "fast",
     response_schema: dict | None = None,
+    _retry_count: int = 0,
 ) -> dict | None:
     """Call OpenRouter and return parsed JSON dict.
 
@@ -261,7 +262,10 @@ def call_llm(
                 return json.loads(content[start:end + 1])
             except json.JSONDecodeError:
                 pass
-        logger.error("LLM returned non-JSON content: %s", content[:300])
+        if _retry_count == 0:
+            logger.warning("LLM returned non-JSON — retrying once (content: %s)", content[:120])
+            return call_llm(prompt, tier, response_schema, _retry_count=1)
+        logger.error("LLM returned non-JSON content after retry: %s", content[:300])
         return None
 
 
