@@ -1,383 +1,200 @@
-"""Rugby Union stats fetcher — API-Sports (api-sports.io, 100 req/day free).
+"""Rugby Union stats fetcher — TheSportsDB (free, no key required).
 
-Covers Super Rugby and other Union competitions.
-NRL (Rugby League) is NOT covered by this API.
+Covers Super Rugby Pacific, URC, Premiership Rugby, Top 14, and more.
+Uses the same TheSportsDB V1 API as the rugby_league provider.
+
+Limitations on free tier:
+  - Team search works (searchteams.php)
+  - Last events returns only 1 recent event per team (eventslast.php)
+  - League standings are NOT available on free tier
 """
 
 from __future__ import annotations
 
-import datetime as _dt
 import logging
+from difflib import SequenceMatcher
 
 import httpx
 
-from src.config import settings
+from src.enrichment.team_mapping import FUZZY_THRESHOLD, normalize_team_name
 
 from .models import TIMEOUT, MatchStats, compute_completeness
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Rate limiter (daily budget — separate from basketball)
-# ---------------------------------------------------------------------------
-
-_rg_daily_count = 0
-_rg_daily_date: str = ""
-_RG_DAILY_LIMIT = 100
+_TSDB_BASE = "https://www.thesportsdb.com/api/v1/json/3"
 
 
-def _rg_rate_limit() -> bool:
-    """Check and increment the daily request counter."""
-    global _rg_daily_count, _rg_daily_date  # noqa: PLW0603
-    today = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
-    if today != _rg_daily_date:
-        _rg_daily_count = 0
-        _rg_daily_date = today
-
-    if _rg_daily_count >= _RG_DAILY_LIMIT:
-        logger.warning("API-Rugby daily limit reached (%d/%d)", _rg_daily_count, _RG_DAILY_LIMIT)
-        return False
-
-    _rg_daily_count += 1
-    return True
-
-
-# ---------------------------------------------------------------------------
-# API helpers
-# ---------------------------------------------------------------------------
-
-def _rg_get(path: str, params: dict | None = None) -> dict | None:
-    """GET request to API-Sports rugby endpoint."""
-    if not _rg_rate_limit():
-        return None
-    url = f"{settings.stats.rugby_api_base}{path}"
-    headers = {"x-apisports-key": settings.basketball_api_key}
+def _tsdb_get(endpoint: str, params: dict | None = None) -> dict | None:
+    """GET request to TheSportsDB V1 API."""
+    url = f"{_TSDB_BASE}/{endpoint}"
     try:
-        resp = httpx.get(url, headers=headers, params=params, timeout=TIMEOUT)
+        resp = httpx.get(url, params=params, timeout=TIMEOUT, follow_redirects=True)
         if resp.status_code == 429:
-            logger.warning("API-Rugby rate limit hit — backing off.")
+            logger.warning("TheSportsDB rate limit hit.")
             return None
         resp.raise_for_status()
+        text = resp.text.strip()
+        if not text:
+            return None
         return resp.json()
     except Exception as exc:
-        logger.warning("API-Rugby request failed: %s %s", path, exc)
+        logger.warning("TheSportsDB request failed: %s %s", endpoint, exc)
         return None
 
 
-# ---------------------------------------------------------------------------
-# League resolution
-# ---------------------------------------------------------------------------
-
-_RG_LEAGUE_OVERRIDES: dict[str, int] = {
-    "super rugby": 71,
-    "super rugby pacific": 71,
-    "premiership rugby": 13,
-    "english premiership": 13,
-    "top 14": 17,
-    "united rugby championship": 69,
-    "urc": 69,
-    "pro14": 69,
-    "six nations": 52,
-    "rugby championship": 51,
-}
-
-_rg_league_cache: dict[str, int | None] = {}
+# Cache: betfair_name_lower -> {"id": str, "name": str} | None
+_ru_team_cache: dict[str, dict | None] = {}
 
 
-def _rg_resolve_league(competition_name: str) -> int | None:
-    """Map a Betfair competition name to an API-Rugby league ID."""
-    if not competition_name:
+def _search_team(name: str) -> dict | None:
+    """Search for a rugby union team in TheSportsDB."""
+    key = name.lower().strip()
+    if key in _ru_team_cache:
+        return _ru_team_cache[key]
+
+    data = _tsdb_get("searchteams.php", params={"t": name})
+    if not data:
+        _ru_team_cache[key] = None
         return None
 
-    norm = competition_name.lower().strip()
-    if norm in _rg_league_cache:
-        return _rg_league_cache[norm]
+    teams = data.get("teams") or []
 
-    for key, lid in _RG_LEAGUE_OVERRIDES.items():
-        if key in norm or norm in key:
-            _rg_league_cache[norm] = lid
-            return lid
+    # Filter to rugby union teams
+    rugby_teams = [t for t in teams if t.get("strSport", "").lower() == "rugby"]
 
-    # Search API by keywords
-    words = [w for w in competition_name.split() if len(w) > 2]
-    for word in words:
-        data = _rg_get("/leagues", params={"search": word})
-        if not data or not isinstance(data, dict):
-            continue
-        for league in data.get("response", []):
-            league_name = league.get("name", "").lower()
-            league_id = league.get("id")
-            league_type = league.get("type", "")
-            if league_id and league_type == "League" and (norm in league_name or league_name in norm):
-                _rg_league_cache[norm] = league_id
-                logger.info("Resolved rugby league %r -> ID %d", competition_name, league_id)
-                return league_id
-
-    _rg_league_cache[norm] = None
-    logger.info("Could not resolve rugby league for competition=%r", competition_name)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Season resolution
-# ---------------------------------------------------------------------------
-
-_rg_season_cache: dict[int, str | None] = {}
-
-
-def _rg_get_season(league_id: int) -> str | None:
-    """Get current season for a league, cached. Picks the season covering today."""
-    if league_id in _rg_season_cache:
-        return _rg_season_cache[league_id]
-
-    data = _rg_get("/leagues", params={"id": league_id})
-    if not data or not isinstance(data, dict):
+    if not rugby_teams:
+        _ru_team_cache[key] = None
         return None
 
-    results = data.get("response", [])
-    if not results:
-        return None
-
-    seasons = results[0].get("seasons", [])
-    if not seasons:
-        return None
-
-    today = _dt.date.today().isoformat()
-
-    # Prefer season whose date range covers today
-    for s in reversed(seasons):
-        start = s.get("start", "")
-        end = s.get("end", "")
-        if start <= today <= end:
-            season = str(s.get("season", ""))
-            _rg_season_cache[league_id] = season
-            return season
-
-    # Fallback: latest season with start in the past
-    for s in reversed(seasons):
-        if s.get("start", "") <= today:
-            season = str(s.get("season", ""))
-            _rg_season_cache[league_id] = season
-            return season
-
-    season = str(seasons[-1].get("season", ""))
-    _rg_season_cache[league_id] = season
-    return season
-
-
-# ---------------------------------------------------------------------------
-# Team index
-# ---------------------------------------------------------------------------
-
-_rg_team_indexes: dict[int, dict[str, int]] = {}
-_rg_team_name_casing: dict[int, dict[str, str]] = {}
-
-
-def _rg_build_team_index(league_id: int, season: str) -> None:
-    """Build team name -> ID index. Falls back to previous season if empty."""
-    if league_id in _rg_team_indexes:
-        return
-
-    data = _rg_get("/teams", params={"league": league_id, "season": season})
-    teams = data.get("response", []) if data and isinstance(data, dict) else []
-
-    # Fallback to previous seasons if API hasn't populated current one
-    if not teams:
-        try:
-            year = int(season)
-        except ValueError:
-            year = None
-        if year:
-            for offset in range(1, 4):  # Try up to 3 years back
-                prev = str(year - offset)
-                logger.info("No rugby teams for league %d season %s, trying %s", league_id, season, prev)
-                data = _rg_get("/teams", params={"league": league_id, "season": prev})
-                teams = data.get("response", []) if data and isinstance(data, dict) else []
-                if teams:
-                    _rg_season_cache[league_id] = prev
-                    break
-
-    index: dict[str, int] = {}
-    casing: dict[str, str] = {}
-    for entry in teams:
-        tid = entry.get("id")
-        name = entry.get("name", "")
-        if tid and name:
-            index[name.lower()] = tid
-            casing[name.lower()] = name
-
-    _rg_team_indexes[league_id] = index
-    _rg_team_name_casing[league_id] = casing
-    logger.info("API-Rugby team index built for league %d: %d entries", league_id, len(index))
-
-
-def _rg_resolve_team_id(name: str, league_id: int) -> int | None:
-    """Resolve a team name to an API-Rugby team ID."""
-    from difflib import SequenceMatcher
-
-    from src.enrichment.team_mapping import FUZZY_THRESHOLD, normalize_team_name
-
-    index = _rg_team_indexes.get(league_id, {})
-    if not index:
-        return None
-
-    key = name.lower()
-    if key in index:
-        return index[key]
-
+    # Find best match
     normalized = normalize_team_name(name)
-    for idx_key, tid in index.items():
-        if normalize_team_name(idx_key) == normalized:
-            index[key] = tid
-            return tid
-
     best_score = 0.0
-    best_id: int | None = None
-    for idx_key, tid in index.items():
-        score = SequenceMatcher(None, normalized, normalize_team_name(idx_key)).ratio()
+    best_team: dict | None = None
+
+    for t in rugby_teams:
+        team_name = t.get("strTeam", "")
+        score = SequenceMatcher(None, normalized, normalize_team_name(team_name)).ratio()
         if score > best_score:
             best_score = score
-            best_id = tid
+            best_team = t
 
-    if best_score >= FUZZY_THRESHOLD and best_id is not None:
-        index[key] = best_id
-        return best_id
+    if best_team is not None and best_score >= FUZZY_THRESHOLD:
+        result = {
+            "id": str(best_team.get("idTeam", "")),
+            "name": best_team.get("strTeam", ""),
+        }
+        _ru_team_cache[key] = result
+        return result
 
-    logger.debug("No API-Rugby match for %r in league %d (best=%.2f)", name, league_id, best_score)
+    # Fallback: take the first rugby result
+    if rugby_teams:
+        t = rugby_teams[0]
+        result = {
+            "id": str(t.get("idTeam", "")),
+            "name": t.get("strTeam", ""),
+        }
+        _ru_team_cache[key] = result
+        return result
+
+    _ru_team_cache[key] = None
     return None
 
 
-# ---------------------------------------------------------------------------
-# Data fetchers
-# ---------------------------------------------------------------------------
+def _fetch_last_events(team_id: str) -> list[dict]:
+    """Fetch last completed events for a team."""
+    data = _tsdb_get("eventslast.php", params={"id": team_id})
+    if not data:
+        return []
+    return data.get("results") or []
 
-def _rg_team_form(
-    team_id: int, league_id: int, season: str, limit: int = 5,
+
+def _compute_form(
+    events: list[dict], team_id: str,
 ) -> tuple[float | None, float | None, float | None]:
-    """Fetch recent form: (win_rate_pts, points_scored_avg, points_conceded_avg)."""
-    data = _rg_get("/games", params={
-        "team": team_id, "league": league_id, "season": season,
-    })
-    if not data or not isinstance(data, dict):
-        return None, None, None
-
-    games = data.get("response", [])
-    finished = [g for g in games if g.get("status", {}).get("short") == "FT"]
-    finished.sort(key=lambda g: g.get("date", ""), reverse=True)
-    recent = finished[:limit]
-
-    if not recent:
+    """Compute form from recent events: (win_rate_pts, pts_scored_avg, pts_conceded_avg)."""
+    if not events:
         return None, None, None
 
     wins = 0
     draws = 0
     total_scored = 0
     total_conceded = 0
+    counted = 0
 
-    for g in recent:
-        home_score = g.get("scores", {}).get("home", 0) or 0
-        away_score = g.get("scores", {}).get("away", 0) or 0
-        home_id = g.get("teams", {}).get("home", {}).get("id")
+    for e in events:
+        home_id = str(e.get("idHomeTeam", ""))
+        away_id = str(e.get("idAwayTeam", ""))
+        home_score = e.get("intHomeScore")
+        away_score = e.get("intAwayScore")
 
-        if home_id == team_id:
-            total_scored += home_score
-            total_conceded += away_score
-            if home_score > away_score:
+        if home_score is None or away_score is None:
+            continue
+
+        try:
+            hs = int(home_score)
+            as_ = int(away_score)
+        except (ValueError, TypeError):
+            continue
+
+        is_home = home_id == team_id
+
+        if is_home:
+            total_scored += hs
+            total_conceded += as_
+            if hs > as_:
                 wins += 1
-            elif home_score == away_score:
+            elif hs == as_:
                 draws += 1
         else:
-            total_scored += away_score
-            total_conceded += home_score
-            if away_score > home_score:
+            total_scored += as_
+            total_conceded += hs
+            if as_ > hs:
                 wins += 1
-            elif home_score == away_score:
+            elif hs == as_:
                 draws += 1
 
-    count = len(recent)
-    # pts_per_game on 0-2 scale: win=2, draw=1, loss=0 (normalised)
-    pts = round((wins * 2 + draws) / count, 2)
-    return pts, round(total_scored / count, 2), round(total_conceded / count, 2)
+        counted += 1
 
+    if counted == 0:
+        return None, None, None
 
-_rg_standings_cache: dict[tuple[int, str], dict[int, int]] = {}
+    pts = round((wins * 2 + draws) / counted, 2)
+    return (
+        pts,
+        round(total_scored / counted, 2),
+        round(total_conceded / counted, 2),
+    )
 
-
-def _rg_fetch_standings(league_id: int, season: str) -> dict[int, int]:
-    """Fetch standings: {team_id: position}."""
-    cache_key = (league_id, season)
-    if cache_key in _rg_standings_cache:
-        return _rg_standings_cache[cache_key]
-
-    data = _rg_get("/standings", params={"league": league_id, "season": season})
-    result: dict[int, int] = {}
-    if data and isinstance(data, dict):
-        for group in data.get("response", []):
-            entries = group if isinstance(group, list) else [group]
-            for entry in entries:
-                tid = entry.get("team", {}).get("id")
-                pos = entry.get("position")
-                if tid and pos is not None:
-                    result[tid] = pos
-
-    _rg_standings_cache[cache_key] = result
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Main fetch
-# ---------------------------------------------------------------------------
 
 def fetch_rugby_stats(
     home_canonical: str,
     away_canonical: str,
     competition: str = "",
 ) -> MatchStats | None:
-    """Fetch rugby union stats from API-Sports."""
-    if not settings.basketball_api_key:
-        logger.debug("No API-Sports key configured — skipping rugby stats.")
-        return None
+    """Fetch rugby union stats from TheSportsDB."""
+    home_team = _search_team(home_canonical)
+    away_team = _search_team(away_canonical)
 
-    league_id = _rg_resolve_league(competition)
-    if league_id is None:
-        return None
-
-    season = _rg_get_season(league_id)
-    if not season:
-        logger.info("Could not determine season for rugby league %d", league_id)
-        return None
-
-    _rg_build_team_index(league_id, season)
-    # Re-read season — build may have fallen back
-    season = _rg_season_cache.get(league_id, season)
-
-    home_id = _rg_resolve_team_id(home_canonical, league_id)
-    away_id = _rg_resolve_team_id(away_canonical, league_id)
-
-    if home_id is None and away_id is None:
-        logger.info("Could not resolve either rugby team: %s vs %s (league=%d)",
-                     home_canonical, away_canonical, league_id)
+    if home_team is None and away_team is None:
+        logger.info("Could not resolve either rugby team: %s vs %s", home_canonical, away_canonical)
         return None
 
     stats = MatchStats(sport="rugby", home_team=home_canonical, away_team=away_canonical)
 
-    if home_id is not None:
-        pts, scored, conceded = _rg_team_form(home_id, league_id, season)
+    if home_team is not None:
+        events = _fetch_last_events(home_team["id"])
+        pts, scored, conceded = _compute_form(events, home_team["id"])
         stats.home_form_pts_per_game = pts
         stats.home_goals_scored_avg = scored
         stats.home_goals_conceded_avg = conceded
 
-    if away_id is not None:
-        pts, scored, conceded = _rg_team_form(away_id, league_id, season)
+    if away_team is not None:
+        events = _fetch_last_events(away_team["id"])
+        pts, scored, conceded = _compute_form(events, away_team["id"])
         stats.away_form_pts_per_game = pts
         stats.away_goals_scored_avg = scored
         stats.away_goals_conceded_avg = conceded
-
-    standings = _rg_fetch_standings(league_id, season)
-    if home_id and home_id in standings:
-        stats.home_league_position = standings[home_id]
-    if away_id and away_id in standings:
-        stats.away_league_position = standings[away_id]
 
     stats.data_completeness = compute_completeness(stats)
     return stats
