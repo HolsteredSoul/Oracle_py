@@ -348,7 +348,7 @@ def get_markets(
         event_name = (getattr(_event, "name", None) if _event else None) or ""
         market_name = getattr(cat, "market_name", None) or cat.market_id
 
-        # Event type ID for sport detection (1=Soccer, 61=AFL, 2=Tennis, etc.)
+        # Event type ID for sport detection (1=Soccer, 61420=AFL, 7524=Hockey, etc.)
         _event_type = getattr(cat, "event_type", None)
         event_type_id = (getattr(_event_type, "id", None) if _event_type else None) or ""
 

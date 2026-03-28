@@ -115,10 +115,17 @@ class TestResolveTeamAFL:
         _resolved_cache.clear()
 
     def test_exact_alias_afl(self):
-        assert resolve_team("Sydney Swans", "afl") == "Sydney"
+        assert resolve_team("Sydney Swans", "afl") == "Sydney Swans"
 
     def test_exact_alias_afl_short(self):
         assert resolve_team("Collingwood", "afl") == "Collingwood"
+
+    def test_betfair_short_names(self):
+        assert resolve_team("Sydney", "afl") == "Sydney Swans"
+        assert resolve_team("Geelong", "afl") == "Geelong Cats"
+        assert resolve_team("Adelaide", "afl") == "Adelaide Crows"
+        assert resolve_team("Gold Coast", "afl") == "Gold Coast SUNS"
+        assert resolve_team("West Coast", "afl") == "West Coast Eagles"
 
     def test_no_match_garbage_afl(self):
         result = resolve_team("Nonexistent Team", "afl")

@@ -53,7 +53,7 @@ _EVENT_TYPE_SOCCER = "1"
 _EVENT_TYPE_TENNIS = "2"
 _EVENT_TYPE_CRICKET = "4"
 _EVENT_TYPE_RUGBY_UNION = "5"
-_EVENT_TYPE_AFL = "61"
+_EVENT_TYPE_AFL = "61420"
 _EVENT_TYPE_RUGBY_LEAGUE = "1477"
 _EVENT_TYPE_BASEBALL = "7511"
 _EVENT_TYPE_BASKETBALL = "7522"
@@ -63,7 +63,8 @@ _STATS_ELIGIBLE_EVENT_TYPES = {
     _EVENT_TYPE_SOCCER, _EVENT_TYPE_AFL,
     _EVENT_TYPE_BASKETBALL, _EVENT_TYPE_BASEBALL,
     _EVENT_TYPE_RUGBY_UNION, _EVENT_TYPE_ICE_HOCKEY,
-    _EVENT_TYPE_CRICKET, _EVENT_TYPE_RUGBY_LEAGUE,
+    _EVENT_TYPE_RUGBY_LEAGUE,
+    # Cricket removed — no CRICKET_API_KEY configured
 }
 
 # Halts all new trade execution when this file exists.
@@ -464,6 +465,31 @@ def _analyse_and_trade(
                 # Re-compute Bayesian update and edge with new delta
                 prior_p = state.priors.get(market_id, default_prior)
                 p_fair = update_probability(prior_p, sentiment_delta, effective_beta)
+
+                # When Perplexity strongly contradicts the statistical model
+                # (large negative delta when model is above market, or vice versa),
+                # the model estimate is likely wrong. Kill the trade instead of
+                # trusting a model that grounded web search evidence disputes.
+                if p_model is not None and abs(deep_resp.sentiment_delta) >= 0.10:
+                    model_vs_market = p_model - mid_price
+                    # Model says higher than market AND Perplexity says lower → model is wrong
+                    # Model says lower than market AND Perplexity says higher → model is wrong
+                    if (model_vs_market > 0 and deep_resp.sentiment_delta < -0.10) or \
+                       (model_vs_market < 0 and deep_resp.sentiment_delta > 0.10):
+                        logger.warning(
+                            "Perplexity contradicts model | market=%s p_model=%.3f "
+                            "mid=%.3f perplexity_delta=%.3f — skipping trade.",
+                            market_id, p_model, mid_price, deep_resp.sentiment_delta,
+                        )
+                        if feed:
+                            feed.log_market(
+                                market_id, question, "skipped_model_contradiction",
+                                reason=f"p_model={p_model:.3f} mid={mid_price:.3f} "
+                                       f"perplexity_delta={deep_resp.sentiment_delta:.3f}",
+                                delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                                volume=matched_volume,
+                            )
+                        return
 
                 divergence = abs(p_fair - mid_price)
                 if divergence > 0.40:

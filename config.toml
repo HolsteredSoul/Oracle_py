@@ -42,8 +42,9 @@ max_new_positions_per_cycle = 3
 poll_interval_sec = 1800
 prob_range = [0.05, 0.95]
 # Only scan sports with statistical model coverage (no tennis/horse racing)
-betfair_event_types = [1, 4, 5, 61, 1477, 7522, 7524, 7511]
-betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT"]
+# Cricket (4) removed — needs CRICKET_API_KEY which is not configured
+betfair_event_types = [1, 5, 61420, 1477, 7522, 7524, 7511]
+betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT", "US", "CA"]
 betfair_hours_ahead = 72
 betfair_max_market_age_hours = 168
 # Adaptive scheduling — interval adjusts based on market density
@@ -55,7 +56,7 @@ rejection_cache_ttl_min = 120  # skip markets that failed hard gates for 2h
 [stats]
 football_api = "football-data"
 football_api_base = "https://api.football-data.org/v4"
-afl_api_base = "https://api.squiggle.com.au"
+afl_api_base = "https://aflapi.afl.com.au/afl/v2"
 basketball_api_base = "https://v1.basketball.api-sports.io"
 mlb_api_base = "https://statsapi.mlb.com/api/v1"
 rugby_api_base = "https://v1.rugby.api-sports.io"
