@@ -425,16 +425,46 @@ def select_runner_prob(
             return model_probs["draw"]
         return None
 
-    is_home = (
-        runner_lower == home_lower
-        or runner_lower in home_lower
-        or home_lower in runner_lower
-    )
-    is_away = (
-        runner_lower == away_lower
-        or runner_lower in away_lower
-        or away_lower in runner_lower
-    )
+    # Common Betfair abbreviations for runner names
+    _ABBREVS: dict[str, str] = {
+        "qld": "queensland", "nsw": "new south wales", "vic": "victoria",
+        "sa": "south australia", "wa": "western australia", "tas": "tasmania",
+        "melb": "melbourne", "syd": "sydney", "bris": "brisbane",
+        "adel": "adelaide", "pth": "perth", "canb": "canberra",
+        "man": "manchester", "utd": "united", "fc": "football club",
+        "wst": "western", "nth": "north", "sth": "south",
+    }
+
+    def _expand(text: str) -> str:
+        """Expand known abbreviations in a name."""
+        words = text.split()
+        return " ".join(_ABBREVS.get(w, w) for w in words)
+
+    def _matches(runner: str, team: str) -> bool:
+        """Check if runner name matches team via substring or fuzzy."""
+        if runner == team or runner in team or team in runner:
+            return True
+        # Expand abbreviations and retry
+        runner_exp = _expand(runner)
+        team_exp = _expand(team)
+        if runner_exp in team_exp or team_exp in runner_exp:
+            return True
+        # Check if all runner words appear as prefixes of team words
+        runner_words = runner_exp.split()
+        team_words = team_exp.split()
+        if runner_words and team_words:
+            matched = 0
+            for rw in runner_words:
+                for tw in team_words:
+                    if tw.startswith(rw) or rw.startswith(tw):
+                        matched += 1
+                        break
+            if matched == len(runner_words):
+                return True
+        return False
+
+    is_home = _matches(runner_lower, home_lower)
+    is_away = _matches(runner_lower, away_lower)
 
     if not is_home and not is_away:
         logger.debug(
