@@ -466,26 +466,28 @@ def _analyse_and_trade(
                 prior_p = state.priors.get(market_id, default_prior)
                 p_fair = update_probability(prior_p, sentiment_delta, effective_beta)
 
-                # When Perplexity strongly contradicts the statistical model
-                # (large negative delta when model is above market, or vice versa),
-                # the model estimate is likely wrong. Kill the trade instead of
-                # trusting a model that grounded web search evidence disputes.
-                if p_model is not None and abs(deep_resp.sentiment_delta) >= 0.10:
+                # Handshake gate: model and Perplexity must AGREE on direction.
+                # Data from 29 trades shows:
+                #   Perplexity agrees with model:   +$118.65 (7W/6L)
+                #   Perplexity disagrees:           -$689.25 (4W/12L)
+                # When they disagree, skip — the "edge" is likely model error.
+                if p_model is not None:
                     model_vs_market = p_model - mid_price
-                    # Model says higher than market AND Perplexity says lower → model is wrong
-                    # Model says lower than market AND Perplexity says higher → model is wrong
-                    if (model_vs_market > 0 and deep_resp.sentiment_delta < -0.10) or \
-                       (model_vs_market < 0 and deep_resp.sentiment_delta > 0.10):
+                    perp_delta = deep_resp.sentiment_delta
+                    # Model says back (p_model > market) but Perplexity says negative
+                    # Model says lay (p_model < market) but Perplexity says positive
+                    if (model_vs_market > 0 and perp_delta < 0) or \
+                       (model_vs_market < 0 and perp_delta > 0):
                         logger.warning(
-                            "Perplexity contradicts model | market=%s p_model=%.3f "
-                            "mid=%.3f perplexity_delta=%.3f — skipping trade.",
-                            market_id, p_model, mid_price, deep_resp.sentiment_delta,
+                            "Handshake failed | market=%s p_model=%.3f "
+                            "mid=%.3f perplexity_delta=%.3f — model and Perplexity disagree, skipping.",
+                            market_id, p_model, mid_price, perp_delta,
                         )
                         if feed:
                             feed.log_market(
-                                market_id, question, "skipped_model_contradiction",
+                                market_id, question, "skipped_handshake",
                                 reason=f"p_model={p_model:.3f} mid={mid_price:.3f} "
-                                       f"perplexity_delta={deep_resp.sentiment_delta:.3f}",
+                                       f"perplexity_delta={perp_delta:.3f}",
                                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                                 volume=matched_volume,
                             )
