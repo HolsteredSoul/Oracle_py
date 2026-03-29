@@ -33,7 +33,7 @@ Oracle is an event-driven trading agent that combines statistical models with LL
 | Rugby League (NRL) | 1477 | TheSportsDB (free) | Logistic | Working |
 | Ice Hockey (NHL) | 7524 | NHL API (free) | Logistic | Working |
 
-Non-NBA basketball, non-NHL hockey, and niche football leagues are scanned but skipped when team mapping fails (no stats = no trade).
+**Competition whitelist**: Only leagues with verified stats coverage are fetched from Betfair. Per-sport API queries prevent junk leagues (Serie C, USL, NPB, etc.) from crowding out viable markets in the 200-slot catalogue cap.
 
 Women's, youth, reserve, and U-age markets are filtered out automatically.
 
@@ -81,10 +81,10 @@ The Streamlit dashboard (`src/dashboard/app.py`) runs separately and reads state
 ## Trade Decision Pipeline
 
 ```
-1. Scanner fetches Betfair markets (filtered by sport, country, prob range)
+1. Per-sport Betfair queries with competition whitelist (only viable leagues)
 2. Niche league gate filters out women's, youth, reserve markets
 3. Statistical model generates p_model from sport-specific stats API
-4. No-model gate: if stats unavailable or completeness < 50%, skip
+4. No-model gate: if stats unavailable or completeness < 75%, skip
 5. Light LLM scan: news sentiment delta + uncertainty
 6. If edge candidate: Perplexity deep scan with grounded web search
 7. HANDSHAKE GATE: model and Perplexity must agree on direction
@@ -149,6 +149,12 @@ pip install -r requirements.txt
    [scanner]
    betfair_event_types = [1, 5, 61420, 1477, 7522, 7524, 7511]
    betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT", "US", "CA"]
+   betfair_hours_ahead = 12     # Scan 12h ahead to catch evening slate
+   # Per-sport competition whitelists (Betfair competition IDs)
+   competition_ids_football = [10932509, 7129730, 55, 59, 81, 117, ...]
+   competition_ids_baseball = [11196870]   # MLB only
+   competition_ids_basketball = [10547864] # NBA only
+   # ... etc for each sport
    ```
 
 ### Running
@@ -177,7 +183,7 @@ pytest tests/ -v
 
 Sport-specific models generate `p_model` from stats APIs:
 - **Football**: Independent Poisson (goals scored/conceded averages)
-- **AFL, Rugby, Basketball, Baseball, Hockey**: Logistic with form differential + home advantage
+- **AFL, Rugby, Basketball, Baseball, Hockey**: Logistic with form differential + home advantage (coefficient 0.80, clamped to [0.20, 0.80] — conservative given small sample sizes from free-tier stats APIs)
 
 ### Probability Update (Bayesian)
 
@@ -231,7 +237,9 @@ size    = min(f_final * bankroll, liquidity * 0.70)
 - **Liquidity gate**: Markets with < $50 available depth rejected
 - **Volume gate**: Markets with < $500 matched volume rejected
 - **In-play gate**: In-play markets rejected (no in-play engine)
+- **Competition whitelist**: Per-sport Betfair queries with `competition_ids` — only leagues with stats coverage
 - **Niche league gate**: Women's, youth, reserve markets filtered
+- **Model clamp**: Logistic models clamped to [0.20, 0.80] — no overconfident predictions from small samples
 - **Slippage model**: Fill prices degrade proportional to order size
 - **Depth-aware fills**: Walk real Betfair order book ladder
 - **Drawdown throttle**: Kelly halved at 25% drawdown
