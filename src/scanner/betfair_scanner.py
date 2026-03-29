@@ -198,18 +198,33 @@ def _liquidity_from_book(
                 if lp > 1.0:
                     best_lay_price = lp
 
-    # Extract full depth ladder for the target runner
+    # Extract full depth ladder for the target runner, and override prob/prices.
+    # The initial prob/best_* above are taken from whichever book runner happens
+    # to appear first — that may differ from the catalogue runner order.  When we
+    # have a specific target_selection_id we must use that runner's prices so that
+    # mid_price always corresponds to the runner being evaluated (not a different
+    # team whose book entry comes first).
     if target_runner_ex is not None:
         if target_runner_ex.available_to_back:
             depth_back = [
                 (o.price, o.size)
                 for o in target_runner_ex.available_to_back
             ]
+            # Override prob / best_back_price with the target runner's price
+            bp = target_runner_ex.available_to_back[0].price
+            p = _implied_prob(bp)
+            if p is not None and _PROB_FLOOR <= p <= _PROB_CEIL:
+                prob = p
+                best_back_price = bp
         if target_runner_ex.available_to_lay:
             depth_lay = [
                 (o.price, o.size)
                 for o in target_runner_ex.available_to_lay
             ]
+            # Override best_lay_price with the target runner's lay price
+            lp = target_runner_ex.available_to_lay[0].price
+            if lp > 1.0:
+                best_lay_price = lp
 
     return prob, total_liquidity, best_back_price, best_lay_price, depth_back, depth_lay
 
