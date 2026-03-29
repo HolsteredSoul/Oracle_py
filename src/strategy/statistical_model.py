@@ -36,6 +36,22 @@ _RUGBY_LEAGUE_HOME_ADVANTAGE = 0.58
 # Cricket home advantage (historical ~55% in limited-overs, higher in Tests)
 _CRICKET_HOME_ADVANTAGE = 0.55
 
+# --- Model sensitivity and clamp ---
+# Coefficient on net scoring differential in logistic models.
+# Reduced from 1.5 to 0.80: stats providers return 1-5 game samples
+# (TheSportsDB free tier = 1 game; early season = 2-3 games).
+# At 1.5 a single blowout game produces 93%+ probabilities.
+# At 0.80 the model stays closer to the home-advantage baseline
+# and lets the market + Perplexity do the heavy lifting.
+_SCORING_COEFF = 0.80
+_STANDINGS_COEFF = 0.50
+
+# Probability clamp for logistic models (not Poisson/football).
+# No head-to-head match is genuinely 95% on Betfair — if it were,
+# the market wouldn't have enough liquidity to trade.
+_LOGISTIC_PROB_FLOOR = 0.20
+_LOGISTIC_PROB_CEIL = 0.80
+
 
 def _poisson_match_probs(
     lambda_home: float,
@@ -128,12 +144,12 @@ def _predict_afl(stats: MatchStats) -> dict[str, float]:
         # Normalize: AFL wins = 4 pts, max ~4 pts/game
         form_diff = (home_form - away_form) / 4.0  # range roughly [-1, 1]
         # Logistic: home advantage intercept + form differential
-        # logit(0.57) ≈ 0.28, scale form_diff by 1.5 for reasonable sensitivity
-        p_home = float(expit(0.28 + 1.5 * form_diff))
+        # logit(0.57) ≈ 0.28
+        p_home = float(expit(0.28 + _SCORING_COEFF * form_diff))
     else:
         p_home = _AFL_HOME_ADVANTAGE
 
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
@@ -161,7 +177,7 @@ def _predict_basketball(stats: MatchStats) -> dict[str, float]:
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
         net_diff = (home_net - away_net) / 20.0  # roughly [-1, 1]
-        logit_p += 1.5 * net_diff
+        logit_p += _SCORING_COEFF * net_diff
 
     # Secondary signal: standings position (lower = better)
     if stats.home_league_position is not None and stats.away_league_position is not None:
@@ -169,10 +185,10 @@ def _predict_basketball(stats: MatchStats) -> dict[str, float]:
         standings_diff = (stats.away_league_position - stats.home_league_position)
         # Normalize by a typical league size (~16-30 teams)
         standings_diff_norm = standings_diff / 20.0
-        logit_p += 0.5 * standings_diff_norm
+        logit_p += _STANDINGS_COEFF * standings_diff_norm
 
     p_home = float(expit(logit_p))
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
@@ -201,16 +217,16 @@ def _predict_rugby(stats: MatchStats) -> dict[str, float]:
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
         net_diff = (home_net - away_net) / 15.0
-        logit_p += 1.5 * net_diff
+        logit_p += _SCORING_COEFF * net_diff
 
     # Secondary: standings position
     if stats.home_league_position is not None and stats.away_league_position is not None:
         standings_diff = (stats.away_league_position - stats.home_league_position)
         standings_diff_norm = standings_diff / 12.0  # ~12 teams in Super Rugby
-        logit_p += 0.5 * standings_diff_norm
+        logit_p += _STANDINGS_COEFF * standings_diff_norm
 
     p_home = float(expit(logit_p))
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
@@ -238,16 +254,16 @@ def _predict_baseball(stats: MatchStats) -> dict[str, float]:
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
         net_diff = (home_net - away_net) / 5.0
-        logit_p += 1.5 * net_diff
+        logit_p += _SCORING_COEFF * net_diff
 
     # Secondary signal: standings position (lower = better)
     if stats.home_league_position is not None and stats.away_league_position is not None:
         standings_diff = (stats.away_league_position - stats.home_league_position)
         standings_diff_norm = standings_diff / 15.0  # 15 teams per league
-        logit_p += 0.5 * standings_diff_norm
+        logit_p += _STANDINGS_COEFF * standings_diff_norm
 
     p_home = float(expit(logit_p))
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
@@ -274,16 +290,16 @@ def _predict_hockey(stats: MatchStats) -> dict[str, float]:
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
         net_diff = (home_net - away_net) / 3.0
-        logit_p += 1.5 * net_diff
+        logit_p += _SCORING_COEFF * net_diff
 
     # Secondary: standings position
     if stats.home_league_position is not None and stats.away_league_position is not None:
         standings_diff = (stats.away_league_position - stats.home_league_position)
         standings_diff_norm = standings_diff / 16.0  # ~16 teams per conference
-        logit_p += 0.5 * standings_diff_norm
+        logit_p += _STANDINGS_COEFF * standings_diff_norm
 
     p_home = float(expit(logit_p))
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
@@ -311,15 +327,15 @@ def _predict_cricket(stats: MatchStats) -> dict[str, float]:
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
         net_diff = (home_net - away_net) / 50.0
-        logit_p += 1.5 * net_diff
+        logit_p += _SCORING_COEFF * net_diff
 
     # Form differential as secondary signal
     if stats.home_form_pts_per_game is not None and stats.away_form_pts_per_game is not None:
         form_diff = (stats.home_form_pts_per_game - stats.away_form_pts_per_game) / 2.0
-        logit_p += 0.5 * form_diff
+        logit_p += _STANDINGS_COEFF * form_diff
 
     p_home = float(expit(logit_p))
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
@@ -347,16 +363,16 @@ def _predict_rugby_league(stats: MatchStats) -> dict[str, float]:
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
         net_diff = (home_net - away_net) / 15.0
-        logit_p += 1.5 * net_diff
+        logit_p += _SCORING_COEFF * net_diff
 
     # Secondary: standings position
     if stats.home_league_position is not None and stats.away_league_position is not None:
         standings_diff = (stats.away_league_position - stats.home_league_position)
         standings_diff_norm = standings_diff / 8.0  # ~16 teams, midpoint ~8
-        logit_p += 0.5 * standings_diff_norm
+        logit_p += _STANDINGS_COEFF * standings_diff_norm
 
     p_home = float(expit(logit_p))
-    p_home = max(0.05, min(0.95, p_home))
+    p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
 
