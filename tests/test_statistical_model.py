@@ -79,7 +79,9 @@ class TestPredictMatchOdds:
             away_form_pts_per_game=2.0,
             home_goals_scored_avg=90,
             away_goals_scored_avg=80,
-            data_completeness=0.5,
+            home_goals_conceded_avg=75,
+            away_goals_conceded_avg=85,
+            data_completeness=0.75,
         )
         probs = predict_match_odds(stats)
         assert probs is not None
@@ -156,7 +158,9 @@ class TestPredictMatchOdds:
             home_goals_conceded_avg=25.0,
             away_goals_scored_avg=25.0,
             away_goals_conceded_avg=25.0,
-            data_completeness=0.5,
+            home_form_pts_per_game=1.5,
+            away_form_pts_per_game=1.5,
+            data_completeness=0.75,
         )
         probs = predict_match_odds(stats)
         assert probs is not None
@@ -171,7 +175,9 @@ class TestPredictMatchOdds:
             home_goals_conceded_avg=3.0,
             away_goals_scored_avg=3.0,
             away_goals_conceded_avg=6.0,
-            data_completeness=0.5,
+            home_form_pts_per_game=1.8,
+            away_form_pts_per_game=0.6,
+            data_completeness=0.75,
         )
         probs = predict_match_odds(stats)
         assert probs is not None
@@ -195,8 +201,10 @@ class TestPredictMatchOdds:
             home_form_pts_per_game=2.5,
             away_form_pts_per_game=2.5,
             home_goals_scored_avg=85,
+            home_goals_conceded_avg=80,
             away_goals_scored_avg=85,
-            data_completeness=0.5,
+            away_goals_conceded_avg=80,
+            data_completeness=0.75,
         )
         probs = predict_match_odds(stats)
         assert probs is not None

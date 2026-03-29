@@ -92,12 +92,8 @@ def get_match_stats(
     home_canonical = resolve_team(home_team, sport)
     away_canonical = resolve_team(away_team, sport)
 
-    if home_canonical is None and away_canonical is None:
+    if home_canonical is None or away_canonical is None:
         return None
-
-    # Use original names as fallback for partial resolution
-    home_canonical = home_canonical or home_team
-    away_canonical = away_canonical or away_team
 
     # Check cache
     cached = cache_get(home_canonical, away_canonical, sport)

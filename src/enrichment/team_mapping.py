@@ -29,7 +29,7 @@ from src.config import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
-FUZZY_THRESHOLD = 0.70
+FUZZY_THRESHOLD = 0.85
 
 # ---------------------------------------------------------------------------
 # Persistent Perplexity cache — maps "name_lower|sport" to canonical name
@@ -288,14 +288,19 @@ def resolve_team(betfair_name: str, sport: str = "football") -> str | None:
             return canonical
 
     # 4c. Fuzzy match against all index keys
+    #     Skip for short names — SequenceMatcher is unreliable below 6 chars
+    #     (e.g. "Alloa" false-matches "Mallorca"). Let Perplexity handle these.
     best_score = 0.0
     best_key: str | None = None
 
-    for idx_key in index:
-        score = SequenceMatcher(None, normalized, normalize_team_name(idx_key)).ratio()
-        if score > best_score:
-            best_score = score
-            best_key = idx_key
+    if len(normalized) < 6:
+        logger.debug("Fuzzy skip: %r too short (%d chars), deferring to Perplexity", betfair_name, len(normalized))
+    else:
+        for idx_key in index:
+            score = SequenceMatcher(None, normalized, normalize_team_name(idx_key)).ratio()
+            if score > best_score:
+                best_score = score
+                best_key = idx_key
 
     if best_score >= FUZZY_THRESHOLD and best_key is not None:
         canonical = _canonical_from_index(best_key, index)

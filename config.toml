@@ -65,7 +65,7 @@ nhl_api_base = "https://api-web.nhle.com/v1"
 cricket_api_base = "https://api.cricapi.com/v1"
 nrl_api_base = "https://www.thesportsdb.com/api/v1/json/3"
 cache_ttl_hours = 6
-min_data_completeness = 0.5
+min_data_completeness = 0.75
 
 [paper]
 # Queue-position model: simulates order queue friction in _depth_fill()
