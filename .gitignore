@@ -38,3 +38,5 @@ Make_No_Mistakes_Claude.md
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
+tests/test_clv_snapshot.py
+CUserspierrAppDataLocalTempperp_trace.txt
