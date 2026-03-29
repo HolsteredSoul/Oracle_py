@@ -46,8 +46,8 @@ prob_range = [0.05, 0.95]
 # Cricket (4) removed — needs CRICKET_API_KEY which is not configured
 betfair_event_types = [1, 5, 61420, 1477, 7522, 7524, 7511]
 betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT", "US", "CA"]
-# Reduced from 72 — only scan markets within 6h of kickoff (sweet spot for edge)
-betfair_hours_ahead = 6
+# Reduced from 72 — scan markets within 12h to catch evening slate
+betfair_hours_ahead = 12
 betfair_max_market_age_hours = 168
 # Adaptive scheduling — interval adjusts based on market density
 max_markets_per_cycle = 25
