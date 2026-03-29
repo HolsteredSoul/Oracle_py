@@ -383,15 +383,17 @@ def parse_teams_from_event(event_name: str) -> tuple[str, str] | None:
     if " @ " in event_name:
         parts = event_name.split(" @ ", maxsplit=1)
         if len(parts) == 2:
-            away = parts[0].strip()
-            home = parts[1].strip()
+            away = re.sub(r"\s*\(.*$", "", parts[0]).strip()
+            home = re.sub(r"\s*\(.*$", "", parts[1]).strip()
             if home and away:
                 return home, away
 
     parts = re.split(r"\s+(?:vs?\.?|-)\s+", event_name, maxsplit=1)
     if len(parts) == 2:
-        home = parts[0].strip()
-        away = parts[1].strip()
+        # Strip parenthetical suffixes — Betfair appends metadata like
+        # pitcher names "(B Woo)", handicaps "(+1.5)", etc.
+        home = re.sub(r"\s*\(.*$", "", parts[0]).strip()
+        away = re.sub(r"\s*\(.*$", "", parts[1]).strip()
         if home and away:
             return home, away
     return None

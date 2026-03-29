@@ -267,31 +267,43 @@ def get_markets(
     now = datetime.now(timezone.utc)
     cutoff = now + timedelta(hours=hours_ahead)
 
-    allowed_event_types = settings.scanner.betfair_event_types or []
-    mkt_filter = market_filter(
-        market_countries=country_codes,
-        **({
-            "event_type_ids": [str(e) for e in allowed_event_types]
-        } if allowed_event_types else {}),
-    )
-    if allowed_event_types:
-        logger.info(
-            "Betfair scan: filtering to event_type_ids=%s",
-            allowed_event_types,
-        )
+    # --- Per-sport catalogue queries with competition whitelists ---
+    # Each sport gets its own query so junk leagues can't crowd out viable ones.
+    _SPORT_COMP_MAP: dict[str, list[int]] = {
+        "1": settings.scanner.competition_ids_football,       # Football
+        "5": settings.scanner.competition_ids_rugby_union,     # Rugby Union
+        "61420": settings.scanner.competition_ids_afl,         # AFL
+        "1477": settings.scanner.competition_ids_rugby_league, # Rugby League
+        "7522": settings.scanner.competition_ids_basketball,   # Basketball
+        "7524": settings.scanner.competition_ids_hockey,       # Ice Hockey
+        "7511": settings.scanner.competition_ids_baseball,     # Baseball
+    }
 
-    catalogue = client.betting.list_market_catalogue(
-        filter=mkt_filter,
-        market_projection=[
-            "MARKET_START_TIME",
-            "RUNNER_DESCRIPTION",
-            "EVENT",
-            "EVENT_TYPE",
-            "MARKET_DESCRIPTION",
-            "COMPETITION",
-        ],
-        max_results=min(limit * 3, 200),  # cap to avoid excessive batches
-    )
+    allowed_event_types = settings.scanner.betfair_event_types or []
+    _projections = [
+        "MARKET_START_TIME", "RUNNER_DESCRIPTION", "EVENT",
+        "EVENT_TYPE", "MARKET_DESCRIPTION", "COMPETITION",
+    ]
+
+    catalogue: list = []
+    for eid in allowed_event_types:
+        comp_ids = _SPORT_COMP_MAP.get(str(eid), [])
+        filt = market_filter(
+            market_countries=country_codes,
+            event_type_ids=[str(eid)],
+            **({"competition_ids": [str(c) for c in comp_ids]} if comp_ids else {}),
+        )
+        batch = client.betting.list_market_catalogue(
+            filter=filt,
+            market_projection=_projections,
+            max_results=min(limit, 200),
+        )
+        if batch:
+            logger.info(
+                "Betfair scan: event_type=%s comp_ids=%s → %d markets",
+                eid, comp_ids or "all", len(batch),
+            )
+            catalogue.extend(batch)
 
     if not catalogue:
         logger.info("Betfair scan: no markets returned for countries=%s", country_codes)
@@ -435,10 +447,11 @@ def get_markets(
     markets = markets[:limit]
 
     logger.info(
-        "Betfair scan: %d markets after filtering (catalogue size %d, cutoff +%dh)",
+        "Betfair scan: %d markets after filtering (catalogue %d, cutoff +%dh, %d sports queried)",
         len(markets),
         len(catalogue),
         hours_ahead,
+        len(allowed_event_types),
     )
     return markets
 

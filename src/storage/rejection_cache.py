@@ -22,6 +22,7 @@ CACHEABLE_OUTCOMES = frozenset({
     "skipped_niche",
     "skipped_inplay",
     "skipped_crossed",
+    "skipped_no_model",
 })
 
 

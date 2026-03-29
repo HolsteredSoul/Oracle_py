@@ -46,13 +46,44 @@ prob_range = [0.05, 0.95]
 # Cricket (4) removed — needs CRICKET_API_KEY which is not configured
 betfair_event_types = [1, 5, 61420, 1477, 7522, 7524, 7511]
 betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT", "US", "CA"]
-betfair_hours_ahead = 72
+# Reduced from 72 — only scan markets within 6h of kickoff (sweet spot for edge)
+betfair_hours_ahead = 6
 betfair_max_market_age_hours = 168
 # Adaptive scheduling — interval adjusts based on market density
 max_markets_per_cycle = 25
 min_interval_min = 10          # floor: never faster than 10 min
 max_interval_min = 45          # ceiling: never slower than 45 min
 rejection_cache_ttl_min = 120  # skip markets that failed hard gates for 2h
+
+# --- Competition whitelist (Betfair competition IDs) ---
+# Only fetch markets from leagues with actual stats coverage.
+# Per-sport queries prevent junk leagues crowding out viable ones.
+
+# Football — football-data.org free tier leagues
+competition_ids_football = [
+    10932509,   # English Premier League
+    7129730,    # English Championship
+    55,         # French Ligue 1
+    59,         # German Bundesliga
+    81,         # Italian Serie A
+    117,        # Spanish La Liga
+    9404054,    # Dutch Eredivisie
+    12117172,   # Australian A-League Men
+    61,         # German Bundesliga 2
+    30558,      # English FA Cup
+]
+# Baseball — MLB Stats API only
+competition_ids_baseball = [11196870]
+# Basketball — NBA API only
+competition_ids_basketball = [10547864]
+# Ice Hockey — NHL API only
+competition_ids_hockey = [12550521]
+# AFL
+competition_ids_afl = [11897406]
+# Rugby Union — TheSportsDB + API-Sports
+competition_ids_rugby_union = [10536616, 11960510, 31201]  # Super Rugby, Premiership, Top 14
+# Rugby League — TheSportsDB
+competition_ids_rugby_league = [10564377, 11300061]  # NRL, Super League
 
 [stats]
 football_api = "football-data"

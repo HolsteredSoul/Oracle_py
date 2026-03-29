@@ -71,13 +71,21 @@ class ScannerConfig(BaseModel):
     prob_range: Tuple[float, float]
     betfair_event_types: list[int] = Field(default_factory=list)
     betfair_country_codes: list[str] = Field(default_factory=lambda: ["AU"])
-    betfair_hours_ahead: int = Field(default=72, gt=0)
+    betfair_hours_ahead: int = Field(default=6, gt=0)
     betfair_max_market_age_hours: int = Field(default=168, ge=0)
     # Adaptive scheduling
     max_markets_per_cycle: int = Field(default=25, gt=0)
     min_interval_min: int = Field(default=10, gt=0)
     max_interval_min: int = Field(default=45, gt=0)
     rejection_cache_ttl_min: int = Field(default=120, ge=0)
+    # Competition whitelist per sport (Betfair competition IDs)
+    competition_ids_football: list[int] = Field(default_factory=list)
+    competition_ids_baseball: list[int] = Field(default_factory=list)
+    competition_ids_basketball: list[int] = Field(default_factory=list)
+    competition_ids_hockey: list[int] = Field(default_factory=list)
+    competition_ids_afl: list[int] = Field(default_factory=list)
+    competition_ids_rugby_union: list[int] = Field(default_factory=list)
+    competition_ids_rugby_league: list[int] = Field(default_factory=list)
 
     @field_validator("prob_range")
     @classmethod
