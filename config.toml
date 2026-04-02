@@ -44,11 +44,13 @@ poll_interval_sec = 1800
 prob_range = [0.05, 0.95]
 # Only scan sports with statistical model coverage (no tennis/horse racing)
 # Cricket (4) removed — needs CRICKET_API_KEY which is not configured
-betfair_event_types = [1, 5, 61420, 1477, 7522, 7524, 7511]
+betfair_event_types = [1, 5, 61420, 1477, 7524, 7511]
 betfair_country_codes = ["AU", "GB", "DE", "ES", "IT", "FR", "NL", "PT", "US", "CA"]
 # Reduced from 72 — scan markets within 12h to catch evening slate
 betfair_hours_ahead = 12
 betfair_max_market_age_hours = 168
+# Don't trade markets > N hours from kickoff (scan only, no execution)
+betfair_min_hours_before_start = 3
 # Adaptive scheduling — interval adjusts based on market density
 max_markets_per_cycle = 25
 min_interval_min = 10          # floor: never faster than 10 min
@@ -68,7 +70,6 @@ competition_ids_football = [
     81,         # Italian Serie A
     117,        # Spanish La Liga
     9404054,    # Dutch Eredivisie
-    12117172,   # Australian A-League Men
     61,         # German Bundesliga 2
     30558,      # English FA Cup
 ]

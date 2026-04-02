@@ -381,6 +381,18 @@ def _analyse_and_trade(
                 rejection_cache.reject(market_id, "skipped_crossed")
             return
 
+    # C4. Time gate — don't trade markets too far from kickoff
+    min_hours = settings.scanner.betfair_min_hours_before_start
+    if min_hours > 0 and market_start_time:
+        now = datetime.now(timezone.utc)
+        hours_to_start = (market_start_time - now).total_seconds() / 3600
+        if hours_to_start > min_hours:
+            logger.info(
+                "Time gate | market=%s hours_to_start=%.1f > min=%.1f — scan only, no trade",
+                market_id, hours_to_start, min_hours,
+            )
+            return
+
     # --- Direction selection (pick best positive edge ≥ margin_min_paper) ---
     back_edge = executable_edge(p_fair, p_ask, p_bid, "back")
     lay_edge = executable_edge(p_fair, p_ask, p_bid, "lay")

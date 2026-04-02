@@ -78,6 +78,8 @@ class ScannerConfig(BaseModel):
     min_interval_min: int = Field(default=10, gt=0)
     max_interval_min: int = Field(default=45, gt=0)
     rejection_cache_ttl_min: int = Field(default=120, ge=0)
+    # Don't trade markets more than N hours from kickoff (scan only)
+    betfair_min_hours_before_start: float = Field(default=0, ge=0)
     # Competition whitelist per sport (Betfair competition IDs)
     competition_ids_football: list[int] = Field(default_factory=list)
     competition_ids_baseball: list[int] = Field(default_factory=list)
