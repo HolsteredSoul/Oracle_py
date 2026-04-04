@@ -63,7 +63,8 @@ rejection_cache_ttl_min = 120  # skip markets that failed hard gates for 2h
 
 # Football — football-data.org free tier leagues only
 # BL2 (2. Bundesliga) is NOT free tier — 403 on API. Don't add it back.
-# FA Cup removed — mixed-division teams, unreliable model predictions.
+# Dropped: FA Cup (mixed divisions), BL2 (no API), Europa League (low volume),
+#   Primeira Liga (marginal liquidity), Brazilian Serie A (no AU/UK interest).
 competition_ids_football = [
     10932509,   # English Premier League
     7129730,    # English Championship
@@ -72,10 +73,7 @@ competition_ids_football = [
     81,         # Italian Serie A
     117,        # Spanish La Liga
     9404054,    # Dutch Eredivisie
-    99,         # Portuguese Primeira Liga
     228,        # UEFA Champions League
-    2005,       # UEFA Europa League
-    13,         # Brazilian Serie A
 ]
 # Baseball — MLB Stats API only
 competition_ids_baseball = [11196870]
