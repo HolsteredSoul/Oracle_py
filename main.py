@@ -174,8 +174,6 @@ def _analyse_and_trade(
             "No model gate | market=%s question=%s — skipping (no statistical model)",
             market_id, question[:80],
         )
-        if feed:
-            feed.log_market(market_id, question, "skipped_no_model", reason="No stats model for this sport/league")
         if rejection_cache:
             rejection_cache.reject(market_id, "skipped_no_model")
         return
