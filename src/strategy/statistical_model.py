@@ -129,26 +129,33 @@ def _predict_football(stats: MatchStats) -> dict[str, float]:
 
 
 def _predict_afl(stats: MatchStats) -> dict[str, float]:
-    """AFL prediction using form differential + home advantage.
+    """AFL prediction using form differential + standings + home advantage.
 
-    No draws in AFL. Uses a simple logistic-style approach based on
-    form points differential with a home advantage intercept.
+    No draws in AFL. Uses a logistic model based on:
+      - Form points differential
+      - Standings position differential
+      - Home advantage intercept (~57% historical AFL home win rate)
     """
     from scipy.special import expit
 
-    # Form differential: higher means home team is in better form
+    # logit(0.57) ≈ 0.28 — AFL home advantage intercept
+    logit_p = 0.28
+
+    # Primary: form differential
     home_form = stats.home_form_pts_per_game
     away_form = stats.away_form_pts_per_game
-
     if home_form is not None and away_form is not None:
         # Normalize: AFL wins = 4 pts, max ~4 pts/game
         form_diff = (home_form - away_form) / 4.0  # range roughly [-1, 1]
-        # Logistic: home advantage intercept + form differential
-        # logit(0.57) ≈ 0.28
-        p_home = float(expit(0.28 + _SCORING_COEFF * form_diff))
-    else:
-        p_home = _AFL_HOME_ADVANTAGE
+        logit_p += _SCORING_COEFF * form_diff
 
+    # Secondary: standings position (18 teams in AFL)
+    if stats.home_league_position is not None and stats.away_league_position is not None:
+        standings_diff = (stats.away_league_position - stats.home_league_position)
+        standings_diff_norm = standings_diff / 9.0  # 18 teams, midpoint ~9
+        logit_p += _STANDINGS_COEFF * standings_diff_norm
+
+    p_home = float(expit(logit_p))
     p_home = max(_LOGISTIC_PROB_FLOOR, min(_LOGISTIC_PROB_CEIL, p_home))
     return {"home": round(p_home, 6), "away": round(1 - p_home, 6)}
 
@@ -357,18 +364,18 @@ def _predict_rugby_league(stats: MatchStats) -> dict[str, float]:
     # logit(0.58) ≈ 0.32 — NRL has strong home advantage
     logit_p = 0.32
 
-    # Primary: net points differential, normalized by 15 (typical NRL spread)
+    # Primary: net points differential, normalized by 20 (NRL scores 10-40+/team)
     if (home_scored is not None and home_conceded is not None
             and away_scored is not None and away_conceded is not None):
         home_net = home_scored - home_conceded
         away_net = away_scored - away_conceded
-        net_diff = (home_net - away_net) / 15.0
+        net_diff = (home_net - away_net) / 20.0
         logit_p += _SCORING_COEFF * net_diff
 
     # Secondary: standings position
     if stats.home_league_position is not None and stats.away_league_position is not None:
         standings_diff = (stats.away_league_position - stats.home_league_position)
-        standings_diff_norm = standings_diff / 8.0  # ~16 teams, midpoint ~8
+        standings_diff_norm = standings_diff / 9.0  # 17 NRL teams, midpoint ~9
         logit_p += _STANDINGS_COEFF * standings_diff_norm
 
     p_home = float(expit(logit_p))
