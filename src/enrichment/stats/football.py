@@ -79,7 +79,7 @@ _team_id_cache: dict[str, int | None] = {}
 # Original casing cache: lowercase key -> original API name
 _team_name_cache: dict[str, str] = {}
 
-_FD_COMPETITIONS = ["PL", "BL1", "BL2", "SA", "PD", "FL1", "DED", "PPL", "ELC", "BSA", "CL"]
+_FD_COMPETITIONS = ["PL", "BL1", "SA", "PD", "FL1", "DED", "PPL", "ELC", "BSA", "CL"]
 _fd_team_index_built = False
 _FD_TEAM_INDEX_PATH = PROJECT_ROOT / "state" / "fd_team_index.json"
 
