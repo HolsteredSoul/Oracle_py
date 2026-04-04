@@ -124,7 +124,7 @@ def _analyse_and_trade(
             market_id, question[:80],
         )
         if feed:
-            feed.log_market(market_id, question, "skipped_niche", reason="poor stats coverage")
+            feed.log_market(market_id, question, "skipped_niche", reason="Niche league — no reliable stats available")
         if rejection_cache:
             rejection_cache.reject(market_id, "skipped_niche")
         return
@@ -175,7 +175,7 @@ def _analyse_and_trade(
             market_id, question[:80],
         )
         if feed:
-            feed.log_market(market_id, question, "skipped_no_model", reason="no statistical model")
+            feed.log_market(market_id, question, "skipped_no_model", reason="No stats model for this sport/league")
         if rejection_cache:
             rejection_cache.reject(market_id, "skipped_no_model")
         return
@@ -194,7 +194,7 @@ def _analyse_and_trade(
     if raw is None:
         logger.debug("Light scan returned None for market %s", market_id)
         if feed:
-            feed.log_market(market_id, question, "skipped_llm_fail", reason="light scan returned None")
+            feed.log_market(market_id, question, "skipped_llm_fail", reason="LLM scan failed to return a result")
         return
 
     try:
@@ -202,7 +202,7 @@ def _analyse_and_trade(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Light scan parse error for %s: %s | raw: %s", market_id, exc, raw)
         if feed:
-            feed.log_market(market_id, question, "skipped_llm_fail", reason=f"parse error: {exc}")
+            feed.log_market(market_id, question, "skipped_llm_fail", reason=f"LLM response could not be parsed: {exc}")
         return
 
     logger.info(
@@ -278,7 +278,7 @@ def _analyse_and_trade(
         if feed:
             feed.log_market(
                 market_id, question, "skipped_divergence",
-                reason=f"p_fair={p_fair:.3f} mid={mid_price:.3f}",
+                reason=f"Fair price {p_fair:.3f} too far from market {mid_price:.3f} — likely model error",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
             )
         return
@@ -318,7 +318,7 @@ def _analyse_and_trade(
         if feed:
             feed.log_market(
                 market_id, question, "skipped_liquidity",
-                reason=f"liquidity={available_liquidity:.2f} < min={min_liq:.2f}",
+                reason=f"Only ${available_liquidity:.0f} available, need ${min_liq:.0f}+ liquidity",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
             )
         if rejection_cache:
@@ -336,7 +336,7 @@ def _analyse_and_trade(
         if feed:
             feed.log_market(
                 market_id, question, "skipped_volume",
-                reason=f"volume={matched_volume:.2f} < min={min_vol:.2f}",
+                reason=f"Only ${matched_volume:.0f} matched, need ${min_vol:.0f}+ volume",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume,
             )
@@ -353,7 +353,7 @@ def _analyse_and_trade(
         if feed:
             feed.log_market(
                 market_id, question, "skipped_inplay",
-                reason="in-play market",
+                reason="Market already in-play — no live trading engine",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume,
             )
@@ -373,7 +373,7 @@ def _analyse_and_trade(
             if feed:
                 feed.log_market(
                     market_id, question, "skipped_crossed",
-                    reason=f"best_back={bb:.2f} > best_lay={bl:.2f}",
+                    reason=f"Back {bb:.2f} > Lay {bl:.2f} — stale or suspended data",
                     delta=sentiment_delta, uncertainty=uncertainty_penalty,
                     volume=matched_volume,
                 )
@@ -420,7 +420,7 @@ def _analyse_and_trade(
             if feed:
                 feed.log_market(
                     market_id, question, "no_edge",
-                    reason=f"extreme lay p_bid={p_bid:.4f} > max={max_lay_prob:.4f}",
+                    reason=f"Lay odds too short ({p_bid:.3f}) — max allowed {max_lay_prob:.3f}",
                     delta=sentiment_delta, uncertainty=uncertainty_penalty,
                     volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
                 )
@@ -436,7 +436,7 @@ def _analyse_and_trade(
         if feed:
             feed.log_market(
                 market_id, question, "no_edge",
-                reason=f"back={back_edge:.3f} lay={lay_edge:.3f} net_back={net_back_edge:.3f} net_lay={net_lay_edge:.3f} min={margin_min:.3f}",
+                reason=f"Edge too small (back {back_edge:.3f}, lay {lay_edge:.3f}) — need {margin_min:.3f}+",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
             )
@@ -498,8 +498,7 @@ def _analyse_and_trade(
                         if feed:
                             feed.log_market(
                                 market_id, question, "skipped_handshake",
-                                reason=f"p_model={p_model:.3f} mid={mid_price:.3f} "
-                                       f"perplexity_delta={perp_delta:.3f}",
+                                reason=f"Model and Perplexity disagree — model says {'back' if model_vs_market > 0 else 'lay'}, web says opposite",
                                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                                 volume=matched_volume,
                             )
@@ -515,7 +514,7 @@ def _analyse_and_trade(
                     if feed:
                         feed.log_market(
                             market_id, question, "skipped_divergence",
-                            reason=f"post-Perplexity p_fair={p_fair:.3f} mid={mid_price:.3f}",
+                            reason=f"Still too divergent after web search ({p_fair:.3f} vs market {mid_price:.3f})",
                             delta=sentiment_delta, uncertainty=uncertainty_penalty,
                             volume=matched_volume,
                         )
@@ -550,7 +549,7 @@ def _analyse_and_trade(
                     if feed:
                         feed.log_market(
                             market_id, question, "edge_lost",
-                            reason=f"post-Perplexity back={back_edge:.3f} lay={lay_edge:.3f}",
+                            reason=f"Edge disappeared after web research (back {back_edge:.3f}, lay {lay_edge:.3f})",
                             delta=sentiment_delta, uncertainty=uncertainty_penalty,
                             volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
                         )
@@ -574,7 +573,7 @@ def _analyse_and_trade(
         if feed:
             feed.log_market(
                 market_id, question, "negative_kelly",
-                reason="f_star <= 0 after commission",
+                reason="No profit after Betfair commission — Kelly says pass",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
                 direction=direction,

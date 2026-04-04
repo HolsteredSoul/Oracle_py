@@ -711,7 +711,7 @@ def render_scan_feed_panel(scan_feed: dict) -> None:
             "Back Edge": f"{e['back_edge']:.3f}" if e.get("back_edge") is not None else "—",
             "Lay Edge": f"{e['lay_edge']:.3f}" if e.get("lay_edge") is not None else "—",
             "Dir": e.get("direction") or "—",
-            "Reason": (e.get("reason") or "")[:50],
+            "Reason": (e.get("reason") or "")[:80],
         })
 
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
