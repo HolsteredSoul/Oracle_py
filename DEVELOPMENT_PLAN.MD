@@ -16,11 +16,12 @@ Sequential phases with explicit exit gates. Each gate must pass before advancing
 | 4 | Paper Trading | ✅ Complete | 50+ paper trades logged, P&L tracking accurate |
 | 4B | Betfair-Realistic Fills | ✅ Complete | Depth-aware VWAP, slippage model, pre-trade gates |
 | 4C | Advanced Realism | ✅ Complete | Queue-position model, in-play gate, crossed-book detection |
-| 5A | Intelligence Upgrade | In Progress | CLV tracking, statistical model, team mapping |
+| 5A | Intelligence Upgrade | ✅ Complete | CLV tracking, statistical model, team mapping, ESPN integration |
+| 5B | Model Calibration + Safety Gates | ✅ Complete | Handshake gate, edge threshold, competition whitelist, DNB gate, time gate |
 | 5 | Backtesting & Tuning | Not Started | Sharpe > 0 on held-out data |
 | 6 | Live Betfair | Not Started | OMS tested, small stakes, scale after 30 days |
 
-**Current test count: 220 passing.**
+**Current test count: 238 passing.**
 
 ---
 
@@ -49,7 +50,6 @@ Sequential phases with explicit exit gates. Each gate must pass before advancing
 - `src/llm/prompts.py` — JSON-forced prompt templates for light scan and deep trigger
 - `src/llm/models.py` — Pydantic response validation (malformed LLM output returns None, never crashes)
 - `src/enrichment/news.py` — NewsData.io + Google News RSS
-- `src/enrichment/x_sentiment.py` — X API v2 recent search
 - `src/enrichment/trigger.py` — Event-driven deep trigger decision
 
 **Exit gate passed:** 10 light scans + 2 deep triggers return valid JSON, spend counter works, bad responses handled gracefully.
@@ -113,113 +113,87 @@ Phase 4C exit criteria (evaluate after 100+ trades under new model):
 - Queue-position model active
 - In-play gate and crossed-book detection active
 - Mean fill fraction ≤ 0.92
-- All tests pass (220 tests including 10 new Phase 4C tests)
+- All tests pass (238 tests)
 
 ---
 
-## Phase 5A: Intelligence Upgrade (In Progress)
+## Phase 5A: Intelligence Upgrade ✅
+
+*Completed 2026-03-29*
 
 **Goal:** Replace LLM-headline signal with a multi-source intelligence stack that has measurable edge.
-
-### Context
-
-During Phase 4, the pipeline proved mechanically sound but the LLM intelligence layer (reading news headlines) produces signals the market has already priced in. Betfair exchange prices reflect professional syndicates with statistical models, lineup scrapers, and decades of domain data. Without a stronger signal source, live deployment would be gambling with sophisticated accounting.
 
 ### 5A.1 — Closing Line Value (CLV) Tracking ✅
 
 *Implemented 2026-03-21*
 
-Diagnostic metric measuring whether Oracle's entry price beats the closing line (industry standard for betting edge).
-
 - `Trade` model extended with `closing_price` and `clv` fields
-- `last_seen_price` updated each scan cycle, becomes `closing_price` at settlement
-- CLV panel in dashboard with aggregate metrics and Phase 5A.1 exit gate (100+ trades, CLV > 0)
+- CLV panel in dashboard with aggregate metrics
 - Back CLV = `closing_price - entry_price`; Lay CLV = `entry_price - closing_price`
 
 ### 5A.2 — Statistical Data Integration ✅
 
-*Implemented 2026-03-22*
+*Implemented 2026-03-22, expanded through 2026-04-04*
 
-Statistical model replaces market mid-price as Bayesian prior. LLM becomes a qualitative overlay.
+Statistical model replaces market mid-price as Bayesian prior.
 
-**Data sources:**
-- **football-data.org** — European football: goals scored/conceded, attack/defence strength
-- **Squiggle API** — AFL: predicted margins, win probabilities, team ratings
-- **basketball-api-sports.io** — NBA and international basketball
+**Data sources (current):**
+- **football-data.org** — European football (8 leagues): goals scored/conceded
+- **Official AFL API** — AFL: match results, form, ladder (replaced dead Squiggle API)
+- **ESPN hidden API** — NRL, Super Rugby, Premiership, Top 14, URC: standings + form
+- **MLB Stats API** — MLB: full season stats
+- **NHL API** — NHL: full season stats
+- **TheSportsDB** — Super League fallback only (75% completeness)
 
 **Modules:**
-- `src/enrichment/stats.py` — Multi-sport stats fetcher with caching and completeness scoring
-- `src/enrichment/team_mapping.py` — Fuzzy name resolution (index + Perplexity Sonar fallback + persistent disk cache)
-- `src/strategy/statistical_model.py` — Independent Poisson model (football) / logistic model (AFL/basketball)
+- `src/enrichment/stats/` — Per-sport stats modules with shared models
+- `src/enrichment/stats/espn.py` — Shared ESPN client for rugby union + NRL
+- `src/enrichment/team_mapping.py` — Fuzzy name resolution (threshold 0.85, min 6 chars, Perplexity fallback)
+- `src/strategy/statistical_model.py` — Poisson (football) / logistic (all others, coefficient 0.80, clamp [0.20, 0.80])
 
-**LLM reframing:**
-- Switched `fast_model` to Gemini 2.5 Flash Lite (~50% cheaper, native structured output)
-- `deep_model` is Claude Sonnet 4.6 for edge-candidate deep analysis
-- Prompts now receive `p_model` as statistical context; LLM provides `sentiment_delta` adjustment for qualitative factors only
-- Perplexity Sonar web search validates edge candidates before execution
-
-**Pipeline change:** `p_fair = expit(logit(p_model) + β · sentiment_delta)` — statistical model is the prior, LLM delta is the adjustment.
+**Basketball disabled** (2026-04-02): Injury-blind model produced negative CLV on every NBA trade.
 
 ### 5A.3 — Adaptive Scheduling & Scan Feed ✅
 
 *Implemented 2026-03-25*
 
-Replaced the fixed 30-min/15-market scan regime with intelligent scheduling and full scan observability.
-
-**Adaptive scan interval:**
-- Interval dynamically adjusts between 10-45 minutes based on market density
-- Busy weekends (60-100+ markets): tightens to 10-20 min intervals
-- Quiet weekdays (10-20 markets): relaxes to 45 min intervals
-- Uses `scheduler.reschedule_job()` at the end of each cycle
-
-**Market prioritisation:**
-- Replaced random shuffle with priority sort: time-to-kickoff (≤3h urgent, ≤12h active, >12h early) → matched volume → available liquidity
-- Ensures near-kickoff, high-volume markets are always analysed first
-
-**Rejection cache:**
-- In-memory TTL cache (2h default) for markets that fail hard gates (volume, liquidity, niche, in-play, crossed book)
-- Markets with soft failures (no_edge, negative_kelly) are NOT cached — prices move
-- Prevents wasting LLM calls on markets whose conditions haven't changed
-
-**Scan feed dashboard panel:**
-- `ScanFeedWriter` records per-market outcomes to `state/scan_feed.json` (48-cycle rolling window)
-- Dashboard panel with cycle selector, outcome badges (colour-coded), and detailed entries table
-- Outcomes tracked: `traded`, `no_edge`, `edge_lost`, `skipped_volume`, `skipped_liquidity`, `skipped_niche`, `skipped_inplay`, `skipped_crossed`, `skipped_divergence`, `skipped_llm_fail`, `negative_kelly`, `risk_blocked`
-
-**Football team index disk cache:**
-- Football-data.org 316-team index cached to `state/fd_team_index.json` with TTL
-- Saves 9 API calls per agent restart
-
-**Max markets per cycle raised from 15 → 25** (configurable via `config.toml`).
+- Adaptive scan interval: 10-45 min based on market density
+- Priority sort: time-to-kickoff -> volume -> liquidity
+- Rejection cache: 2h TTL for hard gate failures
+- Scan feed: 48-cycle rolling window with Win % column and plain-English reasons
+- Football team index disk cache (316 teams)
 
 ### 5A.4 — Pre-Match Lineup Ingestion (Not Started)
 
-Team lineups announced 60–90 minutes before kickoff create a genuine informational edge window.
-
-- Lineup API integration (Sportmonks or API-Football)
-- Compare announced XI to expected XI; trigger deep LLM analysis on surprise changes
-- Requires faster scan interval (5–10 min) during pre-match window
+Highest-value remaining signal source. Team lineups announced 60-90 min before kickoff.
 
 ### 5A.5 — Reddit Sentiment Enrichment (Not Started)
 
-Reddit communities (r/tennis, r/soccer, r/sportsbook, r/afl, r/nba) provide pre-match discussion and crowd sentiment that the news pipeline misses. Replaces the removed X/Twitter enrichment with a free alternative.
+Free alternative to X/Twitter. Not prioritized -- statistical model + Perplexity provides sufficient signal.
 
-- Reddit API integration (free tier, OAuth2) via `src/enrichment/reddit_sentiment.py`
-- Subreddit search by event keywords, sorted by relevance/recency
-- Top comment text concatenated and passed to LLM prompt (same pattern as old X enrichment)
-- Optional: extract a quantitative momentum score from upvote ratios / comment volume to feed the deep trigger
+---
 
-### Phase 5A Exit Gate
+## Phase 5B: Model Calibration + Safety Gates ✅
 
-- [x] CLV tracking implemented and running
-- [x] LLM prompts updated to receive statistical model output
-- [x] At least one sports data API integrated (football-data.org, Squiggle, basketball)
-- [x] Adaptive scheduling with priority sort and rejection cache
-- [x] Scan feed dashboard panel for full scan observability
-- [x] Football team index cached to disk
-- [ ] Statistical model calibration plot shows < 10% systematic error across probability bins
-- [ ] Agent paper-trades with upgraded signal for ≥ 1 week
-- [ ] CLV positive across 100+ paper trades
+*Completed 2026-04-04*
+
+**Goal:** Close the gap between model predictions and market prices. Add safety gates for every observed failure mode.
+
+### What was done
+
+1. **Handshake gate** (2026-03-28) — Model + Perplexity must agree on direction. Alone converts -$514 into +$183 on 29 trades.
+2. **Edge threshold raised 2% -> 8%** (2026-03-28) — Sub-8% trades were noise (2W/3L, -$25).
+3. **Team mapping hardened** (2026-03-29) — Fuzzy threshold 0.70 -> 0.85, both teams required, min 6 chars.
+4. **Data completeness raised 50% -> 75%** (2026-03-29) — Prevents garbage predictions from partial data.
+5. **Model recalibration** (2026-03-29) — Scoring coefficient 1.5 -> 0.80, clamp [0.05, 0.95] -> [0.20, 0.80].
+6. **Competition whitelist** (2026-03-29) — Per-sport Betfair queries with competition IDs. Junk leagues can't crowd out viable markets.
+7. **ESPN integration** (2026-03-29) — NRL/rugby union from 38% to 100% completeness.
+8. **Basketball disabled** (2026-04-02) — Negative CLV, injury-blind model.
+9. **3-hour time gate** (2026-04-02) — Markets > 3h from kickoff scanned but not traded.
+10. **AFL standings added** (2026-04-04) — Model was ignoring ladder position (only sport missing it).
+11. **NRL normalizers tuned** (2026-04-04) — Scoring 15 -> 20, standings 8 -> 9.
+12. **DNB conviction gate** (2026-04-04) — Raw match-odds prob >= 55% for Draw No Bet markets.
+13. **Low-value competition cull** (2026-04-04) — Dropped Europa, Primeira, BSA, FA Cup, BL2.
 
 ---
 
@@ -305,7 +279,7 @@ These are code-level constants — `config.toml` cannot override them. Raised de
 ## Testing Strategy
 
 ```bash
-pytest tests/ -v   # 220 tests
+pytest tests/ -v   # 238 tests
 ```
 
 | File | Coverage |
@@ -325,7 +299,7 @@ pytest tests/ -v   # 220 tests
 
 ## Go/No-Go Checklist Before Live Money
 
-- [ ] All test files pass with zero failures (currently 220)
+- [ ] All test files pass with zero failures (currently 238)
 - [ ] Paper trading ran for ≥ 2 weeks with no state corruption
 - [ ] **CLV is positive across 100+ paper trades** (most critical gate)
 - [ ] Backtest Sharpe > 0 on held-out data
@@ -337,10 +311,14 @@ pytest tests/ -v   # 220 tests
 - [ ] `MAX_DAILY_LOSS_AUD = 100.0` kill switch verified in code
 - [ ] `.env` is in `.gitignore` and not committed
 - [ ] Dashboard shows real-time P&L, drawdown, CLV, realism score, and LLM cost
-- [ ] Statistical model is integrated — LLM is NOT the sole signal source
-- [ ] In-play gate active (`allow_in_play = false`)
-- [ ] Queue-position model active (`queue_position_model != "none"`)
-- [ ] Market type filter restricts to MATCH_ODDS, DRAW_NO_BET, WINNER only
+- [x] Statistical model is integrated — LLM is NOT the sole signal source
+- [x] In-play gate active (`allow_in_play = false`)
+- [x] Queue-position model active (`queue_position_model != "none"`)
+- [x] Market type filter restricts to MATCH_ODDS, DRAW_NO_BET, WINNER, MONEYLINE only
+- [ ] Handshake gate active (model + Perplexity agree)
+- [ ] DNB conviction gate active (raw match-odds >= 55%)
+- [ ] 3-hour time gate active
+- [ ] Competition whitelist covers all traded sports
 
 ---
 

@@ -1,10 +1,10 @@
-# Oracle Python Agent – Technical Whitepaper
+# Oracle Python Agent -- Technical Whitepaper
 
-**v1.0.0 – Live Betfair Hardened, Execution-Ready Blueprint**
+**v2.0 -- Calibrated Model, Multi-Gate Risk Architecture**
 **Autonomous Profit-Maximizing Prediction-Market Agent**
-**March 2026**
-**Author:** Pierre 
-**Scope:** Betfair Australia paper trading (safe tuning & validation) → Betfair Australia live (real-money execution)
+**April 2026**
+**Author:** Pierre
+**Scope:** Betfair Australia paper trading (safe tuning & validation) -> Betfair Australia live (real-money execution)
 
 ---
 
@@ -12,25 +12,25 @@
 
 Oracle is a Python-native autonomous agent built to **maximize long-term geometric bankroll growth** while aggressively sizing high-conviction edges and surviving Betfair's harsh realities: wide bid-ask spreads, HFT latency advantage, partial fills, market suspensions, and thin liquidity.
 
-It supersedes the prior Rust prototype, whose main weaknesses were low trade frequency and wasted LLM budget. Oracle fixes this through:
+It combines sport-specific statistical models with LLM-powered web intelligence through a **multi-gate risk architecture** that requires model-LLM agreement before any capital is deployed. The system has evolved through iterative paper trading, with each losing trade contributing a new safety gate.
 
-- **Event-driven triggers** — news, X/Twitter sentiment, and volatility spikes gate expensive LLM calls
-- **LLM as calibrator, not oracle** — outputs `sentiment_delta` and `uncertainty_penalty`; the Bayesian updater does the math
+**Core design principles:**
+- **Statistical model as anchor** -- sport-specific models (Poisson for football, logistic for AFL/rugby/baseball/hockey) generate fair probabilities from free stats APIs
+- **Handshake gate** -- model and Perplexity must agree on direction before any trade (29-trade analysis: agree = +$183, disagree = -$696)
+- **LLM as calibrator, not oracle** -- outputs `sentiment_delta` and `uncertainty_penalty`; the Bayesian updater does the math
 - **Commission-aware Kelly** with explicit liability translation for Lay bets
-- **Spread-adjusted execution thresholds** — no bet placed unless post-commission edge is real
-- **Liquidity-capped sizing** — never move the market against yourself
-- **Full OMS state machine** for Betfair phase (FOK, synthetic TIF, LAPSE)
-- **Interactive Streamlit dashboard** for monitoring and post-trade analysis
+- **18 pre-trade safety gates** -- each added in response to a specific failure mode
+- **Competition whitelist** -- per-sport Betfair queries prevent junk leagues from consuming scan capacity
 
-**Projected realistic live Betfair performance:**
+**Paper trading performance (as of April 2026):**
 
-| Metric | Target |
+| Metric | Actual |
 |---|---|
-| Trades per week | 3–10 high-quality |
-| Post-spread & commission edge | 2.5–7% |
-| Max drawdown | < 40% |
-| Fill rate | ≥ 70% |
-| Daily LLM cost | $0.50–4.00 |
+| Trades placed | ~30 |
+| Active sports | 6 (soccer, AFL, MLB, rugby union, NRL, NHL) |
+| Avg CLV | Under review (3h time gate added to improve) |
+| Edge threshold | 8% minimum |
+| Daily LLM cost | ~$0.87 |
 
 ---
 
@@ -40,15 +40,16 @@ It supersedes the prior Rust prototype, whose main weaknesses were low trade fre
 
 $$G = \mathbb{E}\bigl[\log(W_{t+1}/W_t)\bigr]$$
 
-**Live Betfair targets** (validated via simulation before small-stakes go-live):
+**Live Betfair targets** (validated via paper trading before small-stakes go-live):
 
 | Metric | Minimum Bar |
 |---|---|
-| Executable post-commission edge | ≥ 2.5–4% |
-| Weekly opportunities | 3–10 |
+| Executable post-commission edge | >= 8% |
+| Weekly opportunities | 3-10 |
 | Max drawdown | < 40% |
-| Fill rate on intended size | ≥ 70% |
-| Commission drag modeled | 2–5% fully priced in |
+| Fill rate on intended size | >= 70% |
+| Commission drag modeled | 5% fully priced in |
+| CLV | Positive over 100+ trades |
 
 ---
 
@@ -75,39 +76,36 @@ $$p_\text{fair} > p_\text{ask} + \delta_\text{min}$$
 Execute Lay only if:
 $$p_\text{fair} < p_\text{bid} - \delta_\text{min}$$
 
-Where `delta_min` ≈ 0.015–0.030 post-commission (tuned in backtest; tighter in live phase where spreads are narrower).
+Where `delta_min = 0.080` (8% edge threshold, raised from 2% based on 29-trade analysis showing sub-8% trades are noise).
 
 ### 2.3 Commission-Aware Kelly
 
-Let `c` = commission rate (e.g. 0.05 for 5%).
+Let `c` = commission rate (0.05 for 5%).
 
-**Back bet** — result is the **stake** as a fraction of bankroll:
+**Back bet** -- result is the **stake** as a fraction of bankroll:
 
 $$f_\text{back} = \frac{p_\text{fair} - p_\text{ask} - c \cdot p_\text{fair} \cdot (1 - p_\text{ask})}{(1 - p_\text{ask})(1 - c)}$$
 
-**Lay bet** — result is the **liability** as a fraction of bankroll:
+**Lay bet** -- result is the **liability** as a fraction of bankroll:
 
 $$f_\text{lay} = \frac{p_\text{bid} - p_\text{fair} - c \cdot p_\text{bid} \cdot (1 - p_\text{fair})}{p_\text{bid} \cdot (1 - c)}$$
 
-> `f_lay` outputs a **liability fraction**, not a stake fraction. The §2.4 translation step is mandatory before placing a Lay order.
+> `f_lay` outputs a **liability fraction**, not a stake fraction. The 2.4 translation step is mandatory before placing a Lay order.
 
 **Oracle sizing** (confidence-scaled fractional Kelly with drawdown throttle):
 
 $$f = k \cdot f^{*}_\text{comm} \cdot c_\text{conf} \cdot \lambda_\text{dd}$$
 
 Where:
-- `k` = base Kelly fraction (0.5 half-Kelly default)
+- `k` = base Kelly fraction (0.75 three-quarter Kelly)
 - `c_conf` = LLM confidence scaler = `conf_score / 100`, clamped to [0.5, 1.0]
-- `λ_dd` = drawdown throttle: 1.0 if drawdown < 20%, else 0.5
-- Hard caps: per-bet ≤ 25% bankroll, total open exposure ≤ 85%
-- **Assert `f_back` and `f_lay` ≤ 1.0 before applying Oracle sizing** — any result > 1 indicates a data error and must be rejected
+- `lambda_dd` = drawdown throttle: 1.0 if drawdown < 25%, else 0.5
+- Hard caps: per-bet <= 10% bankroll (`kelly_hard_cap`), total open exposure <= 85%
 
 ### 2.4 Liability vs Stake Translation
 
-This is critical for Betfair Lay bets:
-
-- **Back bets:** `Stake = f_back × Bankroll`
-- **Lay bets:** `Liability = f_lay × Bankroll` → `Stake = Liability / (decimal_odds − 1)`
+- **Back bets:** `Stake = f_back x Bankroll`
+- **Lay bets:** `Liability = f_lay x Bankroll` -> `Stake = Liability / (decimal_odds - 1)`
 
 ### 2.5 Liquidity-Capped Sizing
 
@@ -117,25 +115,42 @@ Where $L_{\text{avail}}$ = available liquidity at the target price tier. The 0.7
 
 ---
 
-## 3. Intelligence Layer — LLM as Sentiment Calibrator
+## 3. Intelligence Layer
 
-### 3.1 LLM Routing via OpenRouter
+### 3.1 Statistical Model (Primary Signal)
 
-Oracle routes LLM calls by cost/depth tradeoff:
+Sport-specific models generate calibrated `p_model` from free stats APIs. This replaces the raw market mid-price as the Bayesian prior.
 
-| Tier | Models | Use Case |
-|---|---|---|
-| Fast (80% of calls) | Cheap fast models (e.g. flash/mini variants) | Light batch scans every 30 min |
-| Deep (triggered only) | Reasoning-class models | News spikes, volatility events |
-| Fallback | Free-tier models | During tuning phase when daily cap hit |
+| Sport | Model | Data Source | Inputs |
+|---|---|---|---|
+| Soccer | Independent Poisson | football-data.org (API key, free tier) | Goals scored/conceded averages -> lambda -> goal matrix |
+| AFL | Logistic | Official AFL API (free, no auth) | Form points differential + ladder standings |
+| Baseball (MLB) | Logistic | MLB Stats API (free, no auth) | Net run differential + standings |
+| Rugby Union | Logistic | ESPN hidden API (free, no auth) | Net points differential + standings |
+| Rugby League (NRL) | Logistic | ESPN hidden API (free, no auth) | Net points differential + standings |
+| Ice Hockey (NHL) | Logistic | NHL API (free, no auth) | Net goal differential + standings |
 
-> **Implementation note:** Specific model IDs are configured in `config.toml` and can be updated as new models are released. Do not hardcode model strings in Python source.
+All logistic models use:
+- **Scoring coefficient**: 0.80 (reduced from 1.5 -- free-tier APIs return 1-5 game samples; at 1.5 a single blowout produces 93%+ probabilities)
+- **Standings coefficient**: 0.50
+- **Probability clamp**: [0.20, 0.80] (no head-to-head match is genuinely 95% on Betfair)
 
-**Daily spend cap enforced in code.** Auto-downgrade to free/cheap models if cap is within 20% of limit.
+**Football (Poisson):** Computes `P(home scores X) x P(away scores Y)` across a 0-7 goal matrix, then aggregates into home/draw/away probabilities. Inherently more stable than logistic models due to averaging over combinatorial outcomes.
 
-### 3.2 LLM Output Contract
+**Team name resolution** (`team_mapping.py`): Three-tier matching -- exact index lookup -> fuzzy SequenceMatcher (threshold 0.85, min 6 chars) -> Perplexity Sonar fallback. Persistent disk cache. Abbreviation expansion for rugby names (qld -> queensland, etc.).
 
-The LLM never outputs a raw probability. It outputs a structured JSON:
+### 3.2 LLM Qualitative Overlay
+
+The LLM acts as a **calibrator, not an oracle**. It receives the statistical model's `p_model` and news/sentiment context, then returns a `sentiment_delta` adjustment for factors statistics cannot capture: injuries, weather, travel fatigue, morale, managerial changes.
+
+**LLM routing via OpenRouter:**
+
+| Tier | Use Case |
+|---|---|
+| Fast (80% of calls) | Light batch scans every 30 min |
+| Deep (triggered only) | Perplexity Sonar web search for edge candidates |
+
+**LLM output contract:**
 
 ```json
 {
@@ -145,210 +160,251 @@ The LLM never outputs a raw probability. It outputs a structured JSON:
 }
 ```
 
-- `sentiment_delta` ∈ [-1.0, +1.0]: directional signal strength
-- `uncertainty_penalty` ∈ [0.0, 1.0]: reduces effective confidence
+- `sentiment_delta` in [-1.0, +1.0]: directional signal strength
+- `uncertainty_penalty` in [0.0, 1.0]: reduces effective confidence
+- LLM adjustment capped at +/-5% from p_model
 
 ### 3.3 Bayesian Updater
 
-Starting from the market mid-price as a prior:
-$$p_\text{mid} = \frac{p_\text{ask} + p_\text{bid}}{2}$$
+Starting from the statistical model probability as prior:
 
-Apply logit-space update:
-$$p_\text{fair} = \sigma\bigl(\text{logit}(p_\text{mid}) + \beta \cdot \Delta_{\text{sent}}\bigr)$$
+$$p_\text{fair} = \sigma\bigl(\text{logit}(p_\text{model}) + \beta \cdot \Delta_{\text{sent}}\bigr)$$
 
-Where `σ` is the sigmoid (logistic) function, `β` is the sentiment weight (default 0.15, tuned in backtest), and $\Delta_{\text{sent}}$ = `sentiment_delta`. This ensures `p_fair` remains in (0, 1) by construction.
+Where `sigma` is the sigmoid function, `beta = 0.50` (sentiment weight), and `Delta_sent` = `sentiment_delta`.
 
-**Effective confidence** (used for `c_conf`):
-$$\text{conf} = c_{\text{base}} \times (1 - u_{\text{pen}})$$
+### 3.4 Handshake Gate
 
-Where $c_{\text{base}}$ = `base_conf` and $u_{\text{pen}}$ = `uncertainty_penalty`.
-
-### 3.4 Prompt Templates (JSON-Forced)
-
-**Template 1: Light Batch Scan**
 ```
-You are an expert prediction-market trader.
-Given: question text, current mid-price, brief news/X summary.
-Output JSON only — no prose:
-{
-  "sentiment_delta": <float -1.0 to 1.0>,
-  "uncertainty_penalty": <float 0.0 to 1.0>,
-  "rationale": "<one sentence>"
-}
+if model says BACK (p_model > market) and Perplexity delta < 0: SKIP
+if model says LAY  (p_model < market) and Perplexity delta > 0: SKIP
 ```
 
-**Template 2: Deep Trigger Analysis**
-```
-You are an expert prediction-market trader. Think step-by-step:
-1. Synthesize all provided news and X/Twitter sentiment signals.
-2. Estimate directional impact and magnitude.
-3. Note key uncertainties.
-Output JSON only:
-{
-  "sentiment_delta": <float -1.0 to 1.0>,
-  "uncertainty_penalty": <float 0.0 to 1.0>,
-  "key_factors": ["<factor1>", "<factor2>"],
-  "rationale": "<two to three sentences>"
-}
-```
+Both must agree on direction. Historical data (29 trades):
+- Agree: +$183 (57% win rate)
+- Disagree: -$696 (20% win rate)
 
-**Template 3: Exit Decision**
+This gate alone would have converted -$514 total P&L into +$183.
+
+### 3.5 DNB Conviction Gate
+
+Draw No Bet markets renormalize match-odds probabilities by stripping the draw:
+
+$$p_\text{DNB} = \frac{p_\text{home}}{p_\text{home} + p_\text{away}}$$
+
+This inflates small match-odds edges into large-looking DNB edges. Example: a 53% match-odds prediction becomes 75% in DNB with a typical 30% draw. A 13pp match-odds disagreement becomes a 20pp DNB "edge."
+
+**Gate:** Raw match-odds probability must be >= 55% (`dnb_min_match_odds_prob`) before allowing any DNB trade. This ensures the model genuinely favours the team before DNB math inflates the edge.
+
+**Origin:** Charlton v Bristol City DNB -- model had Charlton at ~33% match odds (predicted loss), but DNB renormalized to 75.4%. System bet $96, lost. Gate added to prevent recurrence.
+
+### 3.6 CLV Tracking (Diagnostic)
+
+Closing Line Value is tracked on every trade. At settlement, the last observed market price before suspension becomes `closing_price`.
+
+- Back: `CLV = closing_price - entry_price`
+- Lay: `CLV = entry_price - closing_price`
+
+Positive CLV over 100+ trades indicates genuine edge. Negative CLV means the market was smarter than the model regardless of short-term P&L.
+
+---
+
+## 4. Trade Decision Pipeline
+
 ```
-Given: current position details, updated news/X sentiment, current market price.
-Decide whether to hold or exit.
-Output JSON only:
-{
-  "decision": "HOLD" | "TRAIL-SELL" | "FULL-EXIT",
-  "trailing_stop_pct": <float>,
-  "target_price": <float>,
-  "rationale": "<one to two sentences>"
-}
+ 1. Per-sport Betfair queries with competition whitelist
+      Each sport gets its own 200-slot catalogue query with competition_ids.
+      Sports can't crowd each other out.
+
+ 2. Niche league gate
+      Women's, youth, reserve, U-age markets filtered by regex.
+
+ 3. Statistical model generates p_model
+      Sport-specific model from stats API data.
+      Data completeness must be >= 75% (6/8 stat fields).
+
+ 4. No-model gate
+      If stats unavailable or completeness < 75%, skip market entirely.
+      LLM-only probability estimates have no edge over the market.
+
+ 5. DNB conviction gate
+      For DRAW_NO_BET markets: raw match-odds probability >= 55%.
+      Prevents renormalization inflation of coin-flip predictions.
+
+ 6. Light LLM scan
+      Cheap model produces sentiment_delta + uncertainty_penalty.
+
+ 7. Bayesian update
+      p_fair = expit(logit(p_model) + beta * sentiment_delta)
+      LLM adjustment capped at +/-5% from p_model.
+
+ 8. Edge candidate check
+      If net_edge < margin_min (8%), skip.
+
+ 9. Deep Perplexity scan
+      Grounded web search for edge candidates only.
+      Fresh internet context before execution.
+
+10. Extreme divergence gate
+      If |p_fair - market_mid| > 30pp, skip.
+      Likely model error, not a real edge.
+
+11. HANDSHAKE GATE
+      Model and Perplexity must agree on direction.
+      Any disagreement blocks the trade. No threshold.
+
+12. Realism gates
+      Volume >= $500 matched. Liquidity >= $50 available.
+      Not in-play. Not crossed book. Edge >= 8%.
+
+13. Time gate
+      Market must be within 3h of start time.
+      Earlier entry = negative CLV from stale/thin prices.
+
+14. Lay win probability gate
+      Lay bets require >= 35% chance of winning (1 - p_fair >= 0.35).
+      Prevents laying heavy favourites where payout requires a rare upset.
+
+15. Kelly sizing
+      Commission-aware Kelly with confidence scaling and drawdown throttle.
+      Hard cap at 10% of bankroll per trade.
+
+16. Risk gates
+      Total exposure <= 85%. Max 3 new positions per cycle.
+
+17. Paper execution
+      Depth-aware VWAP fills walking the real Betfair order book.
+      Linear slippage model. Edge re-checked post-slippage.
+
+18. State persistence + scan feed logging
+      Atomic JSON writes. Per-market outcome logged for dashboard.
 ```
 
 ---
 
-## 4. Event-Driven Architecture
+## 5. Sports Coverage
 
-### 4.1 Main Cycle
+### 5.1 Active Sports
 
-```text
-START: Adaptive timer (10-45 min based on market density)
-  │
-  ├─ Settle open positions (check Betfair for resolutions)
-  │
-  ├─ Fetch markets from Betfair (up to 200 catalogue, ~55 after filtering)
-  │
-  ├─ Priority sort: time-to-kickoff → volume → liquidity
-  │   (soonest kickoff + highest volume analysed first)
-  │
-  ├─ Skip rejection-cached markets (hard gate failures cached for 2h)
-  │
-  ├─ For each market (up to 25 per cycle):
-  │   │
-  │   ├─ Niche league filter (U21, women, reserve → skip + cache)
-  │   │
-  │   ├─ Statistical model → p_model (Poisson/logistic prior)
-  │   │
-  │   ├─ Light scan (cheap LLM) → sentiment_delta, uncertainty
-  │   │
-  │   ├─ Deep trigger? (|delta| > 0.15 or volatility_z > 2.3)
-  │   │   └─ Yes → Deep LLM + Perplexity web search
-  │   │
-  │   ├─ Bayesian update: p_fair = expit(logit(p_model) + β · delta)
-  │   │
-  │   ├─ Realism gates: volume ≥ $500, liquidity ≥ $50, not in-play,
-  │   │   not crossed book (failures cached in rejection cache)
-  │   │
-  │   ├─ Edge check: net_edge ≥ margin_min (3% post-commission)
-  │   │
-  │   ├─ Perplexity-enriched deep re-scan for edge candidates
-  │   │
-  │   ├─ Kelly sizing → risk gates → execute via PaperBroker
-  │   │
-  │   └─ Log outcome to scan feed (for dashboard)
-  │
-  ├─ Compute next interval from market density + rejection count
-  │   (more actionable markets → shorter interval)
-  │
-  └─ Persist state → update dashboard → LOOP
-```
+**Soccer** (8 competitions):
+Premier League, Championship, Bundesliga, Serie A, La Liga, Ligue 1, Eredivisie, Champions League.
+Stats: football-data.org (API key, free tier, 10 req/min).
 
-### 4.2 Sizing Decision Tree
+**AFL:**
+Official AFL API (aflapi.afl.com.au, free, no auth). Full season match results, ladder computed from results. Model uses form points differential + standings position.
 
-```text
-INPUT: Bayesian edge (post-spread, post-commission)
-  │
-  ▼
-Confidence ≥ 52%?
-  ├─ No  ──► Skip (log reason)
-  │
-  └─ Yes ──►  Drawdown > 20%?
-                ├─ Yes ──► Force k = 0.5 (half-Kelly only)
-                │
-                └─ No  ──► k scales 0.5→1.0 based on confidence
-                               │
-                               ▼
-                    Apply hard cap: 85% total exposure
-                               │
-                               ▼
-                    Back:  Stake    = f × Bankroll
-                    Lay:   Liability = f × Bankroll
-                           Stake    = Liability / (odds − 1)
-                               │
-                               ▼
-                    Final size = min(Stake/Liability, liquidity × 0.70)
-```
+**Baseball (MLB):**
+MLB Stats API (statsapi.mlb.com, free, no auth). Full season.
+
+**Rugby Union** (4 competitions):
+Super Rugby, Premiership, Top 14, URC via ESPN hidden API (site.api.espn.com, free, no auth). Standings + 60-day form (last 5 matches).
+
+**Rugby League:**
+NRL via ESPN. Super League falls back to TheSportsDB (free tier, 1 last event, no standings, 75% completeness max).
+
+**Ice Hockey (NHL):**
+NHL API (api-web.nhle.com, free, no auth). Full season.
+
+### 5.2 Disabled Sports
+
+**Basketball (NBA):** Disabled 2026-04-02. Injury-blind model produced negative CLV. Every NBA market had model 20-40% off from market. The model provides false confidence without injury data. Do not re-enable without an injury-aware data source.
+
+### 5.3 Dead APIs (Tested, Do Not Reuse)
+
+| API | Problem | Date Tested |
+|---|---|---|
+| Squiggle (AFL) | HTTP 522 -- server unreachable | 2026-03-28 |
+| API-Sports (rugby) | All 142 leagues return null fields | 2026-03-28 |
+| TheSportsDB standings | Empty for non-soccer leagues | 2026-03-28 |
+| ESPN (Super League) | Returns empty teams/standings | 2026-03-29 |
+| football-data.org BL2 | 403 Forbidden despite docs | 2026-04-04 |
 
 ---
 
-## 5. Configuration (`config.toml`)
+## 6. Configuration (`config.toml`)
 
 ```toml
 [llm]
-# Update model IDs here as new models are released — never hardcode in source
-fast_model = "grok-3-mini-fast"         # example; check OpenRouter for current cheapest
-deep_model = "claude-sonnet-4-6"        # example; use a reasoning-class model
 daily_cap_usd = 5.0
-downgrade_threshold_pct = 0.80          # switch to free models at 80% of daily cap
+downgrade_threshold_pct = 0.80
 
 [triggers]
-news_sentiment_delta = 0.28
-x_momentum = 0.32
-volatility_z = 2.3
-margin_min_paper = 0.025                # looser for paper trading
-margin_min_live = 0.015                 # tighter for live execution
+margin_min_paper = 0.080               # 8% edge minimum (raised from 2% based on trade data)
+margin_min_live = 0.060                # Tighter for live -- but still high
 
 [risk]
 max_exposure = 0.85
-drawdown_throttle_pct = 0.20            # apply 50% throttle above this drawdown level
+drawdown_throttle_pct = 0.25           # Apply 50% throttle above 25% drawdown
 drawdown_throttle_factor = 0.50
-confidence_floor = 52                   # minimum effective confidence to trade
-commission_pct = 0.05                   # Betfair standard (5%)
-beta = 0.15                             # Bayesian update weight (tune in backtest)
+confidence_floor = 35
+commission_pct = 0.05                  # Betfair standard (5%)
+beta = 0.50                            # Bayesian update weight
 liquidity_safety_factor = 0.70
-kelly_base_fraction = 0.50              # half-Kelly
-min_market_liquidity_aud = 50.0         # skip markets with < $50 available
-min_matched_volume_aud = 500.0          # skip markets with < $500 matched volume
-max_lay_probability = 0.90              # block lays at odds < 1.11
-slippage_model = "linear"              # "none", "linear", or "sqrt"
-slippage_factor = 0.10                 # price impact coefficient
-allow_in_play = false                  # reject in-play markets (no in-play engine)
-reject_crossed_book = true             # skip crossed order books (stale data)
-
-[paper]
-queue_position_model = "probabilistic" # "none", "linear", "probabilistic"
-queue_factor = 0.50                    # hidden queue depth factor
-track_fill_rates = true                # log fill rates for calibration
+kelly_base_fraction = 0.75             # Three-quarter Kelly
+kelly_hard_cap = 0.10                  # Max 10% of bankroll per trade
+min_market_liquidity_aud = 50.0
+min_matched_volume_aud = 500.0
+max_lay_probability = 0.90             # Block lays at odds < 1.11
+min_lay_win_probability = 0.35         # Lay bets must have >= 35% win chance
+dnb_min_match_odds_prob = 0.55         # DNB: raw match-odds prob >= 55%
+slippage_model = "linear"
+slippage_factor = 0.10
+allow_in_play = false
+reject_crossed_book = true
+max_new_positions_per_cycle = 3
 
 [scanner]
-poll_interval_sec = 1800                # initial interval (adaptive: 10-45 min)
-prob_range = [0.05, 0.95]              # avoid nearly-resolved markets
-max_markets_per_cycle = 25             # markets analysed per cycle
-min_interval_min = 10                  # adaptive floor (busy weekends)
-max_interval_min = 45                  # adaptive ceiling (quiet weekdays)
-rejection_cache_ttl_min = 120          # skip hard-gate failures for 2h
-
-[betfair]
-# Phase 4 only — leave empty during paper trading
-api_key = ""
-session_token = ""
-min_bet_aud = 2.00
-synthetic_tif_sec = 300
+betfair_event_types = [1, 5, 61420, 1477, 7524, 7511]
+betfair_hours_ahead = 12               # Scan 12h ahead to catch evening slate
+betfair_min_hours_before_start = 3     # Only trade within 3h of kickoff
+# Per-sport competition whitelists (Betfair competition IDs)
+competition_ids_football = [10932509, 7129730, 55, 59, 81, 117, 88, 228]
+competition_ids_baseball = [11196870]  # MLB only
+competition_ids_hockey = [7825509]     # NHL only
+competition_ids_afl = [11897406]       # AFL
+competition_ids_rugby = [...]          # Super Rugby, Premiership, Top 14
+competition_ids_rugby_league = [10564377, 11300061]  # NRL, Super League
 ```
 
 ---
 
-## 6. OMS Requirements (Betfair Live Phase)
+## 7. Safety Architecture (18 Gates)
 
-### 6.1 Order State Machine
+Each gate was added in response to a specific failure mode during paper trading.
+
+| Gate | Trigger | Origin |
+|---|---|---|
+| Handshake | Model + Perplexity disagree on direction | 29-trade analysis: disagree = -$696 |
+| DNB conviction | Raw match-odds prob < 55% for DNB markets | Charlton -$96 loss from inflated DNB edge |
+| Edge threshold | Edge < 8% | Sub-8% trades: 2W/3L, -$25 |
+| Time gate | Market > 3h from kickoff | Negative CLV from entering thin/stale markets |
+| Extreme divergence | Model vs market gap > 30pp | Model error, not real edge |
+| No-model gate | Stats unavailable or completeness < 75% | Harrogate -$49 from 50% completeness data |
+| Lay win probability | 1 - p_fair < 35% for lay bets | Laying near-certainties = high risk/reward ratio |
+| Volume gate | Matched volume < $500 | Thin markets have stale/unrepresentative prices |
+| Liquidity gate | Available depth < $50 | Can't fill orders meaningfully |
+| In-play gate | Market is in-play | No in-play engine |
+| Crossed-book gate | Best back < best lay | Stale/suspended market data |
+| Competition whitelist | Market not in whitelisted competition | Junk leagues crowd out viable markets |
+| Niche league gate | Women's, youth, reserve, U-age | No stats coverage, unreliable model |
+| Model clamp | Logistic output clamped to [0.20, 0.80] | Prevents overconfidence from small samples |
+| Kill switch | `state/kill_switch.txt` exists | Manual emergency stop |
+| Drawdown throttle | Kelly halved at 25% drawdown | Survive losing streaks |
+| Rejection cache | Recently-failed markets cached for 2h | Prevents retrying dead markets |
+| Max positions | Max 3 new positions per cycle | Prevents concentration spikes |
+
+---
+
+## 8. OMS Requirements (Betfair Live Phase)
+
+### 8.1 Order State Machine
 
 ```
-Pending ──► Placed ──► Partial ──► Filled ──► Trailing ──► Exited
-                │                     │
-                └──► Cancelled        └──► Expired (TIF)
+Pending --> Placed --> Partial --> Filled --> Trailing --> Exited
+                |                     |
+                +---> Cancelled       +---> Expired (TIF)
 ```
 
-### 6.2 Order Types
+### 8.2 Order Types
 
 | Type | When Used | Implementation |
 |---|---|---|
@@ -356,239 +412,179 @@ Pending ──► Placed ──► Partial ──► Filled ──► Trailing �
 | Limit + Synthetic TIF | Resting on book | Python timer cancels after 300s if unfilled |
 | Persistence: LAPSE | All orders | Auto-cancelled by Betfair on in-play or suspension |
 
-### 6.3 Operational Rules
+### 8.3 Operational Rules
 
 - **Partial fills:** Recalculate remaining Kelly fraction on next cycle using updated exposure
 - **Rate limiting:** `tenacity` exponential backoff on `TOO_MUCH_DATA` and API throttle responses
 - **Suspension handling:** Clear all resting orders on `MarketSuspended` event; re-evaluate on resume
-- **Reconciliation:** After every cycle, reconcile local state with Betfair `/listCurrentOrders` to catch any divergence
+- **Reconciliation:** After every cycle, reconcile local state with Betfair `/listCurrentOrders`
 
 ---
 
-## 7. Dashboard & Observability
+## 9. Dashboard & Observability
 
 **Streamlit + Plotly real-time dashboard:**
 
 | Panel | Content |
 |---|---|
 | Top metrics | Bankroll, P&L, win rate, CLV, exposure, drawdown |
-| Scan feed | Live per-market outcomes with cycle selector, outcome badges, and entries table |
+| Scan feed | Live per-market outcomes with cycle selector, Win %, outcome badges, entries table |
 | Equity curve | Running bankroll vs time |
 | Cash curve | Bankroll (including escrowed capital) vs time |
 | CLV chart | Closing line value per trade + cumulative trend |
 | Position table | Open positions with entry price, P&L, last seen price |
 | Trade log | Full history with filters (settled/open/cancelled) |
 | LLM cost tracker | Daily spend vs cap with progress bar |
-| Realism checklist | Scored feature checklist (fill model, slippage, gates) |
+| Realism checklist | Scored feature checklist |
 | CSV export | Full trade history download |
 
 ---
 
-## 8. File Structure
+## 10. File Structure
 
 ```
 oracle-py/
-├── main.py                     # Entry point: scheduler, main loop, CLI args
-├── config.toml                 # All settings (LLM, triggers, risk, Betfair)
-├── .env                        # OpenRouter key, X API key, Betfair credentials
-├── requirements.txt            # Pinned pip dependencies
-├── README.md
-├── WHITEPAPER.MD
-├── .gitignore                  # Must exclude .env, state/, logs/
-│
-├── data/                       # Historical data (CSV/JSON for backtesting)
-├── logs/                       # Rotating daily log files
-├── state/                      # oracle_state.json (bankroll, positions, priors, history)
-│
-├── src/
-│   ├── __init__.py
-│   ├── config.py               # Loads config.toml + .env via pydantic-settings
-│   │
-│   ├── enrichment/
-│   │   ├── __init__.py
-│   │   ├── news.py             # NewsData.io + Google News RSS
-│   │   ├── stats.py            # Statistical data fetcher (football-data.org, Squiggle, Basketball)
-│   │   ├── team_mapping.py     # Betfair ↔ stats API name resolution (index + Perplexity fallback)
-│   │   └── trigger.py          # Event-driven deep trigger decision
-│   │
-│   ├── llm/
-│   │   ├── __init__.py
-│   │   ├── client.py           # OpenRouter wrapper: routing, cost tracking, retries
-│   │   └── prompts.py          # All 3 JSON prompt templates
-│   │
-│   ├── strategy/
-│   │   ├── __init__.py
-│   │   ├── bayesian.py         # logit-space updater + β calibration
-│   │   ├── kelly.py            # Commission-aware Kelly + liability translation
-│   │   ├── edge.py             # Executable edge calculation (ask/bid/commission)
-│   │   └── statistical_model.py # Independent Poisson match outcome model
-│   │
-│   ├── scanner/
-│   │   ├── __init__.py
-│   │   └── betfair_scanner.py  # Betfair Exchange: market list, prices, volumes
-│   │
-│   ├── risk/
-│   │   ├── __init__.py
-│   │   └── manager.py          # Exposure gates, drawdown throttle, confidence floor
-│   │
-│   ├── execution/
-│   │   ├── __init__.py
-│   │   ├── paper.py            # Betfair paper trading simulation
-│   │   └── betfair_oms.py      # Phase 6: live OMS state machine, FOK, synthetic TIF
-│   │
-│   ├── dashboard/
-│   │   ├── __init__.py
-│   │   └── app.py              # Streamlit app: all panels listed in §7
-│   │
-│   ├── backtesting/
-│   │   ├── __init__.py
-│   │   └── harness.py          # Historical replay, parameter sweep
-│   │
-│   └── storage/
-│       ├── __init__.py
-│       ├── state_manager.py    # JSON persistence: load/save/atomic write
-│       ├── scan_feed.py        # Per-market scan outcomes for dashboard display
-│       └── rejection_cache.py  # In-memory TTL cache — skip recently-rejected markets
-│
-└── tests/
-    ├── __init__.py
-    ├── test_kelly.py           # Kelly formula unit tests (edge cases, liability math)
-    ├── test_bayesian.py        # Bayesian updater tests (boundary probs, β sensitivity)
-    ├── test_edge.py            # Edge calculation tests
-    ├── test_risk.py            # Risk gate tests
-    └── test_oms.py             # OMS state machine tests (Phase 4)
++-- main.py                     # Entry point: scheduler, trade pipeline, all 18 gates
++-- config.toml                 # All settings (LLM, triggers, risk, scanner)
++-- .env                        # API keys + Betfair credentials
++-- requirements.txt            # Pinned pip dependencies
++-- README.md
++-- WHITEPAPER.MD
++-- DEVELOPMENT_PLAN.MD
++-- .gitignore
+|
++-- logs/                       # Rotating daily log files (7-day retention)
++-- state/                      # oracle_state.json, scan_feed.json, fd_team_index.json
+|
++-- src/
+|   +-- config.py               # Pydantic-validated config from config.toml + .env
+|   |
+|   +-- enrichment/
+|   |   +-- news.py             # NewsData.io + Google News RSS
+|   |   +-- team_mapping.py     # Betfair <-> stats API name resolution
+|   |   +-- trigger.py          # Event-driven deep trigger decision
+|   |   +-- stats/
+|   |       +-- __init__.py     # get_match_stats() dispatcher
+|   |       +-- models.py       # MatchStats dataclass + completeness scoring
+|   |       +-- football.py     # football-data.org (Poisson inputs)
+|   |       +-- afl.py          # Official AFL API (form + ladder)
+|   |       +-- baseball.py     # MLB Stats API
+|   |       +-- rugby.py        # ESPN (rugby union)
+|   |       +-- rugby_league.py # ESPN (NRL) + TheSportsDB fallback (Super League)
+|   |       +-- hockey.py       # NHL API
+|   |       +-- espn.py         # Shared ESPN client (standings + form)
+|   |
+|   +-- llm/
+|   |   +-- client.py           # OpenRouter wrapper: routing, cost tracking, retries
+|   |   +-- prompts.py          # JSON-forced prompt templates
+|   |   +-- models.py           # Pydantic response validation
+|   |
+|   +-- strategy/
+|   |   +-- bayesian.py         # Logit-space probability updater
+|   |   +-- kelly.py            # Commission-aware Kelly + liability translation
+|   |   +-- edge.py             # Executable edge calculation
+|   |   +-- statistical_model.py# Poisson (football) / logistic (all others)
+|   |
+|   +-- scanner/
+|   |   +-- betfair_scanner.py  # Per-sport Betfair queries with competition whitelists
+|   |
+|   +-- risk/
+|   |   +-- manager.py          # Exposure gates, drawdown throttle, confidence floor
+|   |
+|   +-- execution/
+|   |   +-- paper.py            # Paper broker: FOK, depth-aware fills, settlement
+|   |
+|   +-- dashboard/
+|   |   +-- app.py              # Streamlit app with all dashboard panels
+|   |
+|   +-- storage/
+|       +-- state_manager.py    # JSON persistence: load/save/atomic write
+|       +-- scan_feed.py        # Per-market scan outcomes (48-cycle rolling window)
+|       +-- rejection_cache.py  # In-memory TTL cache (2h)
+|
++-- tests/                      # 238 tests
+    +-- test_paper.py           # Depth fill, slippage, queue model, settlement, CLV
+    +-- test_kelly.py           # Kelly formulas, liability, boundary inputs, hypothesis
+    +-- test_bayesian.py        # Logit update, beta sensitivity, boundary probabilities
+    +-- test_edge.py            # Edge signs, commission adjustment
+    +-- test_risk.py            # Each gate fires independently
+    +-- test_betfair_scanner.py # Mocked API, market parsing, resolution detection
+    +-- test_team_mapping.py    # Fuzzy matching, Perplexity fallback, caching
+    +-- test_stats.py           # Stats fetcher, completeness scoring
+    +-- test_settlement_validator.py  # P&L consistency checks
+    +-- test_structured_output.py     # JSON schema generation and validation
+    +-- test_statistical_model.py     # Poisson + logistic model validation
 ```
 
 ---
 
-## 9. Risk Considerations
+## 11. Risk Considerations
 
 This section is non-optional reading.
 
 - **Betfair is a real-money exchange.** Bugs in Kelly sizing, liability translation, or OMS state can result in outsized losing bets. All Betfair code must pass unit tests and paper-mode validation before live deployment.
-- **LLM outputs are probabilistic, not deterministic.** `sentiment_delta` is a noisy signal. `β = 0.15` is intentionally conservative. Do not increase β above 0.30 without extended backtesting evidence.
-- **Partial fills are the norm, not the exception.** The system must handle them gracefully. Never assume an order is fully filled until confirmed via `/listCurrentOrders`.
-- **Commission is not optional math.** At 5%, it eliminates edges below ~2.5%. Every formula in §2 prices commission in. Do not skip it during paper-mode testing.
-- **Kelly fractions > 1.0 must be hard-blocked.** A bug producing `f* > 1` would risk more than the bankroll. Add an assertion in `kelly.py`.
-- **Drawdown recovery is slow.** The 40% max drawdown target implies starting recovery from a 40% loss. Tighten early limits (max_exposure = 0.60) for the first month of live trading.
+- **LLM outputs are probabilistic, not deterministic.** `sentiment_delta` is a noisy signal. `beta = 0.50` is calibrated but still amplifies noise. The handshake gate exists because the LLM is frequently wrong.
+- **Statistical models are only as good as their data.** Free-tier APIs return 1-5 game samples early in the season. The [0.20, 0.80] clamp and 0.80 scoring coefficient exist to prevent overconfidence from small samples.
+- **DNB renormalization inflates edge.** A marginal match-odds advantage becomes a large-looking DNB edge. The 55% conviction gate prevents backing teams the model barely favours.
+- **Negative CLV is the real signal, not P&L.** Positive P&L with negative CLV means running hot on variance. The 3h time gate was added after discovering consistently negative CLV from early entries.
+- **Partial fills are the norm, not the exception.** The system must handle them gracefully. Never assume an order is fully filled until confirmed.
+- **Commission is not optional math.** At 5%, it eliminates edges below ~2.5%. Every formula prices commission in.
+- **Kelly fractions > 1.0 must be hard-blocked.** A bug producing `f* > 1` would risk more than the bankroll.
+- **Injury-blind models are worse than no model.** Basketball was disabled after every NBA trade showed model 20-40% off from market due to missing injury data.
 
 ---
 
-## 10. Dependencies
+## 12. Dependencies
 
 ```
-# requirements.txt
+# Core
 httpx>=0.27
 tenacity>=8.2
 apscheduler>=3.10
-streamlit>=1.35
-plotly>=5.22
-pandas>=2.2
 pydantic>=2.7
 pydantic-settings>=2.3
 python-dotenv>=1.0
 scipy>=1.13
 toml>=0.10
+
+# Dashboard
+streamlit>=1.35
+plotly>=5.22
+pandas>=2.2
+
+# Testing
 pytest>=8.2
 pytest-asyncio>=0.23
+
+# Betfair
+betfairlightweight
 ```
 
-> **OpenRouter:** Call via `httpx` with `Authorization: Bearer <key>` to `https://openrouter.ai/api/v1/chat/completions`. No additional SDK required.
-> **X API v2:** Use `httpx` with OAuth 2.0 Bearer token. Free tier limits apply.
-> **NewsData.io:** REST API via `httpx`. Free tier: 200 credits/day.
-> **football-data.org:** REST API via `httpx` with `X-Auth-Token` header. Free tier: 10 requests/minute, covers major European leagues (EPL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Championship).
-> **Squiggle API:** Public REST API via `httpx`, no auth required. Provides AFL match predictions, team ratings, and historical results.
-> **Betfair:** `betfairlightweight` library (Phase 4 only).
-
+**External APIs (no additional SDKs required -- all via httpx):**
+- OpenRouter (`https://openrouter.ai/api/v1/chat/completions`)
+- NewsData.io (REST, API key, 200 credits/day)
+- football-data.org (REST, API key, 10 req/min)
+- Official AFL API (`aflapi.afl.com.au`, free, no auth)
+- MLB Stats API (`statsapi.mlb.com`, free, no auth)
+- NHL API (`api-web.nhle.com`, free, no auth)
+- ESPN hidden API (`site.api.espn.com`, free, no auth)
+- TheSportsDB (`thesportsdb.com`, free tier, fallback only)
+- Betfair Exchange API (app key + session token)
 
 ---
 
-## 11. Edge Source Assessment & Intelligence Architecture
-
-*Updated March 2026 — reflects completed Phase 5A intelligence upgrades and Phase 4C execution realism.*
-
-### 11.1 The Adversary
-
-Betfair exchange prices are not soft bookmaker odds. They are set by thousands of participants including professional syndicates with statistical models, real-time team sheet scrapers, injury databases, Elo rating systems, expected goals (xG) models, and decades of domain expertise. By the time a price is live on the exchange, it already incorporates most publicly available information.
-
-To overcome Betfair's 5% commission on net winnings plus typical 2–4% bid-ask spread, Oracle needs to be systematically correct by ~7–9% — not occasionally lucky. This requires a multi-source intelligence stack, not a single signal.
-
-### 11.2 Current Intelligence Stack (Implemented)
-
-Oracle uses a four-layer signal architecture. No single layer is sufficient alone; together they cover quantitative, qualitative, and execution edges.
-
-#### Layer 1: Statistical Model (Primary Signal) ✅
-
-An **independent Poisson model** produces calibrated match outcome probabilities from team scoring rates. This replaces the raw market mid-price as the Bayesian prior.
-
-- **football-data.org** — European football leagues: goals scored/conceded per team, attack/defence strength parameters.
-- **Squiggle API** — AFL: predicted margins, win probabilities, team ratings.
-- **basketball-api-sports.io** — NBA and international basketball leagues.
-
-The Poisson model computes `P(home scores X) × P(away scores Y)` across a goal matrix, then aggregates into home-win / draw / away-win probabilities. For AFL, a logistic model on Elo difference is used instead.
-
-`team_mapping.py` provides fuzzy-matched name resolution between Betfair runner names and stats API identifiers, with a Perplexity Sonar fallback for unresolved names and persistent disk caching.
-
-```
-src/enrichment/stats.py            — fetch scoring rates from football-data.org + Squiggle + basketball
-src/enrichment/team_mapping.py     — Betfair ↔ stats API name resolution (index + fuzzy + Perplexity fallback)
-src/strategy/statistical_model.py  — Poisson (football) / logistic (AFL/basketball) model → p_model
-```
-
-#### Layer 2: LLM Qualitative Overlay ✅
-
-The LLM (Gemini 2.5 Flash Lite for light scans, Claude Sonnet 4.6 for deep analysis) acts as a **calibrator, not an oracle**. It receives the statistical model's `p_model` and news/sentiment context, then returns a `sentiment_delta` adjustment for factors statistics cannot capture: injuries, weather, travel fatigue, morale, managerial changes.
-
-The Bayesian updater applies this delta in logit-space: `p_fair = expit(logit(p_model) + β · sentiment_delta)`.
-
-Edge candidates are further validated via **Perplexity Sonar** web search — a grounded deep re-scan with fresh internet context before execution.
-
-#### Layer 3: CLV Tracking (Diagnostic) ✅
-
-Closing Line Value is tracked on every trade. At settlement, the last observed market price before suspension becomes `closing_price`. CLV is computed as:
-- Back: `CLV = closing_price - entry_price` (positive = entered at better price than market closed at)
-- Lay: `CLV = entry_price - closing_price`
-
-Aggregate CLV is displayed in the dashboard with a Phase 5A.1 exit gate: 100+ trades with CLV > 0 indicates real edge. CLV ≤ 0 after 100 trades means the signal does not beat the closing line regardless of short-term P&L.
-
-#### Layer 4: Execution Realism (Phase 4C) ✅
-
-Paper trading simulates real exchange execution friction:
-
-- **Depth-aware VWAP fills** — walks the full `EX_ALL_OFFERS` order book ladder
-- **Slippage model** — linear or sqrt price impact proportional to order size / liquidity, with edge re-check and trade abort if slippage destroys margin
-- **Queue-position model** — probabilistic Bernoulli draw per ladder level simulating order queue friction (large orders face steep fill rejection)
-- **In-play safety gate** — blocks all in-play markets (no in-play engine)
-- **Crossed-book detection** — rejects stale/suspended market data
-- **Fill-rate tracking** — logs filled fractions for calibration against live fills
-
-### 11.3 Remaining Gaps & Next Steps
-
-| Priority | Enhancement | Status | Expected Impact |
-|----------|-------------|--------|-----------------|
-| 1 | Statistical model calibration validation | Not started | Verify Poisson/logistic predictions match observed outcomes across probability bins |
-| 2 | Historical replay backtesting (Phase 5) | Not started | Parameter sweep on held-out data; Sharpe > 0 required |
-| 3 | Pre-match lineup ingestion | Not started | Time-sensitive alpha in 60–90 min pre-kickoff window |
-| 4 | Market microstructure signals | Not started | Order-book imbalance detection for informed-money front-running |
-| 5 | Commission tier modeling | Not started | Replace fixed 5% with market-type-specific rates |
-| 6 | Market-type fill difficulty | Not started | Different queue friction for horse racing vs AFL match odds |
-
-**Pre-match lineups** are the highest-value remaining signal source. Team lineups announced 60–90 minutes before kickoff create a genuine informational edge window. This is where LLMs add the most value — interpreting the *significance* of a change ("star striker rested" vs "star striker injured") is qualitative reasoning that statistical models cannot replicate.
-
-### 11.4 Config Changes: Paper → Live
+## 13. Config Changes: Paper -> Live
 
 | Parameter | Paper (Current) | Live (Phase 6) | Rationale |
 |---|---|---|---|
-| `margin_min` | 0.030 | 0.025–0.030 | Wider margin compensates for real slippage |
-| `confidence_floor` | 35 | 52–55 | Only trade when genuinely confident with real money |
+| `margin_min` | 0.080 | 0.060 | Slightly tighter -- real spreads may be narrower |
+| `confidence_floor` | 35 | 52-55 | Only trade when genuinely confident with real money |
 | `kelly_base_fraction` | 0.75 | 0.25 | Quarter-Kelly reduces variance for live trading |
 | `max_exposure` | 0.85 | 0.50 | Don't have >50% of bankroll at risk simultaneously |
 | `drawdown_throttle_pct` | 0.25 | 0.15 | Throttle earlier with real money |
-| `kelly_hard_cap` | 0.20 | 0.15 | Raise slightly once signal is validated |
-| `queue_position_model` | `"probabilistic"` | `"none"` | Real exchange handles queue natively |
+| `kelly_hard_cap` | 0.10 | 0.05 | Conservative until signal validated |
 | `allow_in_play` | `false` | `false` | Keep blocked until dedicated in-play engine built |
 | `MAX_SINGLE_BET_AUD` (code) | N/A | 20.0 | Hard-coded ceiling for first 30 days |
 | `MAX_DAILY_LOSS_AUD` (code) | N/A | 100.0 | Kill switch if daily P&L hits this |
 
 ---
-
