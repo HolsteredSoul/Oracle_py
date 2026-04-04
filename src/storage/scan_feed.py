@@ -60,6 +60,7 @@ class ScanFeedWriter:
         direction: str | None = None,
         fill_price: float | None = None,
         f_final: float | None = None,
+        p_fair: float | None = None,
     ) -> None:
         """Record the outcome of analysing one market."""
         self._entries.append({
@@ -75,6 +76,7 @@ class ScanFeedWriter:
             "direction": direction,
             "fill_price": fill_price,
             "f_final": f_final,
+            "p_fair": p_fair,
         })
 
     def end_cycle(self) -> None:

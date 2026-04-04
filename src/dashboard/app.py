@@ -702,9 +702,17 @@ def render_scan_feed_panel(scan_feed: dict) -> None:
     rows = []
     for e in entries:
         outcome = e.get("outcome", "")
+        p_fair = e.get("p_fair")
+        direction = e.get("direction")
+        if p_fair is not None and direction:
+            win_pct = p_fair if direction == "back" else 1.0 - p_fair
+            win_str = f"{win_pct:.0%}"
+        else:
+            win_str = "—"
         rows.append({
             "Market": (e.get("question") or "")[:60],
             "Outcome": outcome.replace("_", " "),
+            "Win %": win_str,
             "Delta": f"{e['delta']:.3f}" if e.get("delta") is not None else "—",
             "Uncert": f"{e['uncertainty']:.3f}" if e.get("uncertainty") is not None else "—",
             "Volume": f"{e['volume']:.0f}" if e.get("volume") is not None else "—",

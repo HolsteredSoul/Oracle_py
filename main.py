@@ -278,6 +278,7 @@ def _analyse_and_trade(
                 market_id, question, "skipped_divergence",
                 reason=f"Fair price {p_fair:.3f} too far from market {mid_price:.3f} — likely model error",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                p_fair=p_fair,
             )
         return
 
@@ -318,6 +319,7 @@ def _analyse_and_trade(
                 market_id, question, "skipped_liquidity",
                 reason=f"Only ${available_liquidity:.0f} available, need ${min_liq:.0f}+ liquidity",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                p_fair=p_fair,
             )
         if rejection_cache:
             rejection_cache.reject(market_id, "skipped_liquidity")
@@ -336,7 +338,7 @@ def _analyse_and_trade(
                 market_id, question, "skipped_volume",
                 reason=f"Only ${matched_volume:.0f} matched, need ${min_vol:.0f}+ volume",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
-                volume=matched_volume,
+                volume=matched_volume, p_fair=p_fair,
             )
         if rejection_cache:
             rejection_cache.reject(market_id, "skipped_volume")
@@ -353,7 +355,7 @@ def _analyse_and_trade(
                 market_id, question, "skipped_inplay",
                 reason="Market already in-play — no live trading engine",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
-                volume=matched_volume,
+                volume=matched_volume, p_fair=p_fair,
             )
         if rejection_cache:
             rejection_cache.reject(market_id, "skipped_inplay")
@@ -373,7 +375,7 @@ def _analyse_and_trade(
                     market_id, question, "skipped_crossed",
                     reason=f"Back {bb:.2f} > Lay {bl:.2f} — stale or suspended data",
                     delta=sentiment_delta, uncertainty=uncertainty_penalty,
-                    volume=matched_volume,
+                    volume=matched_volume, p_fair=p_fair,
                 )
             if rejection_cache:
                 rejection_cache.reject(market_id, "skipped_crossed")
@@ -421,6 +423,24 @@ def _analyse_and_trade(
                     reason=f"Lay odds too short ({p_bid:.3f}) — max allowed {max_lay_prob:.3f}",
                     delta=sentiment_delta, uncertainty=uncertainty_penalty,
                     volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                    p_fair=p_fair,
+                )
+            return
+        # D. Minimum lay win probability gate
+        p_lay_win = 1.0 - p_fair
+        min_lay_win = settings.risk.min_lay_win_probability
+        if p_lay_win < min_lay_win:
+            logger.info(
+                "Lay win prob gate | market=%s p_win=%.3f < min=%.3f",
+                market_id, p_lay_win, min_lay_win,
+            )
+            if feed:
+                feed.log_market(
+                    market_id, question, "no_edge",
+                    reason=f"Lay win prob {p_lay_win:.0%} below {min_lay_win:.0%} minimum",
+                    delta=sentiment_delta, uncertainty=uncertainty_penalty,
+                    volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                    p_fair=p_fair,
                 )
             return
         direction = "lay"
@@ -437,6 +457,7 @@ def _analyse_and_trade(
                 reason=f"Edge too small (back {back_edge:.3f}, lay {lay_edge:.3f}) — need {margin_min:.3f}+",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                p_fair=p_fair,
             )
         return
 
@@ -498,7 +519,7 @@ def _analyse_and_trade(
                                 market_id, question, "skipped_handshake",
                                 reason=f"Model and Perplexity disagree — model says {'back' if model_vs_market > 0 else 'lay'}, web says opposite",
                                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
-                                volume=matched_volume,
+                                volume=matched_volume, p_fair=p_fair,
                             )
                         return
 
@@ -514,7 +535,7 @@ def _analyse_and_trade(
                             market_id, question, "skipped_divergence",
                             reason=f"Still too divergent after web search ({p_fair:.3f} vs market {mid_price:.3f})",
                             delta=sentiment_delta, uncertainty=uncertainty_penalty,
-                            volume=matched_volume,
+                            volume=matched_volume, p_fair=p_fair,
                         )
                     return
 
@@ -550,6 +571,7 @@ def _analyse_and_trade(
                             reason=f"Edge disappeared after web research (back {back_edge:.3f}, lay {lay_edge:.3f})",
                             delta=sentiment_delta, uncertainty=uncertainty_penalty,
                             volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
+                            p_fair=p_fair,
                         )
                     return
             except Exception as exc:  # noqa: BLE001
@@ -574,7 +596,7 @@ def _analyse_and_trade(
                 reason="No profit after Betfair commission — Kelly says pass",
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
-                direction=direction,
+                direction=direction, p_fair=p_fair,
             )
         return
 
@@ -590,7 +612,7 @@ def _analyse_and_trade(
                 reason=gate_reason,
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
-                direction=direction, f_final=f_final,
+                direction=direction, f_final=f_final, p_fair=p_fair,
             )
         return
 
@@ -630,6 +652,7 @@ def _analyse_and_trade(
                 delta=sentiment_delta, uncertainty=uncertainty_penalty,
                 volume=matched_volume, back_edge=back_edge, lay_edge=lay_edge,
                 direction=direction, fill_price=trade.fill_price, f_final=f_final,
+                p_fair=p_fair,
             )
 
 
