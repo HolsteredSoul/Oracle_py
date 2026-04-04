@@ -58,6 +58,7 @@ class RiskConfig(BaseModel):
     min_matched_volume_aud: float = Field(default=500.0, ge=0)
     max_lay_probability: float = Field(default=0.90, gt=0, le=1.0)
     min_lay_win_probability: float = Field(default=0.35, gt=0, le=1.0)
+    dnb_min_match_odds_prob: float = Field(default=0.55, gt=0, le=1.0)
     slippage_model: str = Field(default="linear")
     slippage_factor: float = Field(default=0.10, ge=0)
     allow_in_play: bool = False

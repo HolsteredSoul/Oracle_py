@@ -156,6 +156,28 @@ def _analyse_and_trade(
         if match_stats is not None:
             model_probs = predict_match_odds(match_stats)
             if model_probs is not None:
+                # --- DNB conviction gate ---
+                # DNB renormalization inflates small match-odds edges into
+                # large-looking DNB edges.  Require the raw match-odds
+                # probability to exceed a minimum before allowing a DNB trade.
+                if market_type == "DRAW_NO_BET":
+                    raw_home = model_probs.get("home", 0.0)
+                    raw_away = model_probs.get("away", 0.0)
+                    # Pick the probability for the runner we're evaluating
+                    from src.strategy.statistical_model import select_runner_prob as _srp_check
+                    _is_home = _srp_check(model_probs, runner_name, "MATCH_ODDS", home_team, away_team)
+                    raw_prob = _is_home if _is_home is not None else raw_home
+                    dnb_floor = settings.risk.dnb_min_match_odds_prob
+                    if raw_prob < dnb_floor:
+                        logger.info(
+                            "DNB conviction gate | market=%s raw_match_odds=%.3f < %.3f — "
+                            "skipping (model not confident enough for DNB)",
+                            market_id, raw_prob, dnb_floor,
+                        )
+                        if rejection_cache:
+                            rejection_cache.reject(market_id, "skipped_dnb_conviction")
+                        return
+
                 p_model = select_runner_prob(
                     model_probs, runner_name, market_type, home_team, away_team,
                 )

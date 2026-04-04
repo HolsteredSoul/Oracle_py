@@ -33,6 +33,10 @@ max_lay_probability = 0.90
 # Minimum probability of actually winning money on a lay (1 - p_fair).
 # Prevents laying heavy favourites where payout requires a rare upset.
 min_lay_win_probability = 0.35
+# DNB conviction gate — raw match-odds probability must exceed this
+# to trade Draw No Bet.  Prevents DNB renormalization from inflating
+# a coin-flip match-odds prediction into a large-looking edge.
+dnb_min_match_odds_prob = 0.55
 slippage_model = "linear"
 slippage_factor = 0.10
 # In-play safety gate — reject trades on in-play markets
