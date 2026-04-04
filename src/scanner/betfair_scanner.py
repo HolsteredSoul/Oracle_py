@@ -247,7 +247,7 @@ def _ensure_utc(dt: datetime | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 def get_markets(
-    limit: int = 100,
+    limit: int = 200,
     country_codes: list[str] | None = None,
     hours_ahead: int = 72,
 ) -> list[dict]:
@@ -312,6 +312,7 @@ def get_markets(
             filter=filt,
             market_projection=_projections,
             max_results=min(limit, 200),
+            sort="FIRST_TO_START",
         )
         if batch:
             logger.info(
